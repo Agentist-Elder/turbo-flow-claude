@@ -134,3 +134,4 @@ source ~/.bashrc
 ✅ 4-window tmux workspace  
 
 **Remember:** Always work inside tmux for the best experience!
+
