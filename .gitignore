@@ -12,3 +12,6 @@
 
 # Keep the claude.md configuration
 !/claude.md
+
+# Environment variables (contains sensitive API keys)
+.env
