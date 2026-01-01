@@ -21,7 +21,6 @@ db.serialize(() => {
 function addMemory(text, vector) {
     return new Promise((resolve, reject) => {
         const stmt = db.prepare("INSERT INTO memories (text, vector) VALUES (?, ?)");
-        // Store vector as a JSON string for simple storage
         stmt.run(text, JSON.stringify(vector), function(err) {
             if (err) reject(err);
             else resolve(this.lastID);
@@ -30,16 +29,17 @@ function addMemory(text, vector) {
     });
 }
 
-// --- Helper: Get All Memories ---
+// --- Helper: Get All Memories (WITH TIME) ---
 function getAllMemories() {
     return new Promise((resolve, reject) => {
-        db.all("SELECT text, vector FROM memories", (err, rows) => {
+        // We explicitly select 'created_at' now
+        db.all("SELECT text, vector, created_at FROM memories", (err, rows) => {
             if (err) reject(err);
             else {
-                // Convert JSON string back to Array so math works later
                 const parsed = rows.map(row => ({
                     text: row.text,
-                    vector: JSON.parse(row.vector)
+                    vector: JSON.parse(row.vector),
+                    created_at: row.created_at // <--- Crucial for Recency
                 }));
                 resolve(parsed);
             }

@@ -9,11 +9,10 @@ const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-// --- 🛠️ TOOLS ( The "Hands" ) ---
+// --- 🛠️ TOOLS ---
 const tools = {
     "SYSTEM_DIAGNOSTIC": () => {
-        // Simulating a real system check
-        const integrity = Math.floor(Math.random() * (100 - 80) + 80); // 80-99%
+        const integrity = Math.floor(Math.random() * (100 - 80) + 80);
         const activeThreats = integrity < 90 ? 1 : 0;
         return JSON.stringify({
             status: "ONLINE",
@@ -25,97 +24,133 @@ const tools = {
     }
 };
 
-// --- 1. Retrieval ---
+// --- HELPER: Memorize ---
+async function memorize(text) {
+    try {
+        const res = await axios.post('http://127.0.0.1:3000', { text });
+        const vector = res.data.sample;
+        await addMemory(text, vector);
+        console.log(`   💾 Logged to Memory: "${text.substring(0, 40)}..."`);
+    } catch (e) {
+        console.error("   ❌ Memory Write Failed");
+    }
+}
+
+// --- 1. Retrieval (Time-Aware Recency Boost) ---
 async function findBestContext(query) {
     try {
         const queryRes = await axios.post('http://127.0.0.1:3000', { text: query });
         const queryVec = queryRes.data.sample;
         const memories = await getAllMemories();
-        let best = { text: "", score: -1 };
+        
+        const now = new Date(); // Current UTC time in Node
 
-        for (const mem of memories) {
+        let scoredMemories = memories.map(mem => {
             const docVec = mem.vector;
+            
+            // A. Base Vector Similarity
             const dot = queryVec.reduce((acc, val, i) => acc + val * docVec[i], 0);
             const magA = Math.sqrt(queryVec.reduce((acc, val) => acc + val * val, 0));
             const magB = Math.sqrt(docVec.reduce((acc, val) => acc + val * val, 0));
-            const score = dot / (magA * magB);
-            if (score > best.score) best = { text: mem.text, score };
-        }
-        return best;
+            let score = dot / (magA * magB);
+
+            // B. Recency Boost (FIXED TIMEZONE LOGIC)
+            if (mem.created_at) {
+                // SQLite returns "YYYY-MM-DD HH:MM:SS".
+                // We replace the space with 'T' and add 'Z' to force JavaScript to treat it as UTC.
+                const cleanTime = mem.created_at.replace(' ', 'T') + 'Z';
+                const memTime = new Date(cleanTime);
+                
+                // Calculate difference in minutes
+                const diffMins = (now.getTime() - memTime.getTime()) / 60000;
+
+                // Boost if newer than 5 minutes (allowing small clock skew)
+                if (diffMins < 5 && diffMins >= -1) {
+                    score += 0.5; // HUGE Boost
+                    mem.text = `[JUST NOW] ${mem.text}`;
+                }
+            }
+
+            return { text: mem.text, score: score };
+        });
+
+        // Sort High to Low and take Top 3
+        scoredMemories.sort((a, b) => b.score - a.score);
+        const top3 = scoredMemories.slice(0, 3);
+
+        return {
+            text: top3.map(m => `- ${m.text} (Score: ${(m.score*100).toFixed(0)}%)`).join("\n"),
+            score: top3[0] ? top3[0].score : 0 
+        };
     } catch (e) { return null; }
 }
 
 // --- 2. Generation & Tooling Loop ---
 async function agentBrain(query, contextText) {
     let conversationHistory = `
-    You are a Security Defense Agent.
+    You are an Autonomous Security Droid.
     
-    MEMORY CONTEXT: "${contextText}"
-    USER QUESTION: "${query}"
+    MEMORY CONTEXT (Top 3 Matches):
+    ${contextText}
     
-    TOOLS AVAILABLE:
-    - SYSTEM_DIAGNOSTIC: Returns current server integrity and threat status.
+    USER INPUT: "${query}"
     
-    INSTRUCTIONS:
-    - If you can answer from MEMORY, just answer.
-    - If you need to check the live system status, output exactly: [TOOL_CALL: SYSTEM_DIAGNOSTIC]
-    - Do not hallucinate system status. Use the tool.
+    PROTOCOL:
+    1. COMMANDS: If user implies "run scan" or "check system", YOU MUST EXECUTE THE TOOL. Output: [TOOL_CALL: SYSTEM_DIAGNOSTIC]
+    2. SHORT-TERM MEMORY: If the MEMORY CONTEXT contains entries marked [JUST NOW], these are the most important facts. Use them to answer questions about "recent" or "last" events.
+    3. DO NOT ASK FOR PERMISSION. ACT.
     `;
 
-    // First Pass: Ask the LLM what it wants to do
     let result = await model.generateContent(conversationHistory);
     let response = result.response.text().trim();
 
-    // Check if it wants to use a tool
-    if (response.includes("[TOOL_CALL: SYSTEM_DIAGNOSTIC]")) {
-        console.log("⚙️  Agent is using a tool: SYSTEM_DIAGNOSTIC...");
-        
-        // 1. Run the Tool
-        const toolOutput = tools["SYSTEM_DIAGNOSTIC"]();
-        console.log(`🔌 Tool Output: ${toolOutput}`);
+    // --- SAFETY NET ---
+    const intent = query.toLowerCase();
+    if (!response.includes("[TOOL_CALL") && (intent.includes("run scan") || intent.includes("system check"))) {
+         console.log("⚠️  (Override) Forcing Tool Execution...");
+         response = "[TOOL_CALL: SYSTEM_DIAGNOSTIC]";
+    }
 
-        // 2. Feed the result back to the LLM
+    // --- EXECUTION BLOCK ---
+    if (response.includes("[TOOL_CALL: SYSTEM_DIAGNOSTIC]")) {
+        console.log("⚙️  Running Live Diagnostic...");
+        
+        const toolOutput = tools["SYSTEM_DIAGNOSTIC"]();
+        console.log(`🔌 Output: ${toolOutput}`);
+
+        const logEntry = `[SYSTEM_LOG] Diagnostic ran at ${new Date().toISOString()}. Result: ${toolOutput}`;
+        await memorize(logEntry); 
+
         const secondPrompt = `
-        ${conversationHistory}
-        
+        USER INPUT: "${query}"
         SYSTEM_DIAGNOSTIC RESULT: ${toolOutput}
-        
-        Based on this result, answer the user's question concisely.
+        INSTRUCTION: State the system status clearly.
         `;
 
         const step2 = await model.generateContent(secondPrompt);
-        return step2.response.text();
+        return step2.response.text().trim();
     }
 
     return response;
 }
 
-// --- 3. Learning ---
-async function learnFact(text) {
-    try {
-        process.stdout.write("💾 Memorizing...");
-        const res = await axios.post('http://127.0.0.1:3000', { text });
-        await addMemory(text, res.data.sample);
-        process.stdout.write("\r");
-        console.log(`✅ Learned: "${text.substring(0, 40)}..."`);
-    } catch (e) { console.log(`❌ Failed: ${e.message}`); }
-}
-
 // --- Main Loop ---
-console.log("🤖 DEFENSE AGENT ONLINE. (Tools Active)");
+console.log("🤖 DEFENSE AGENT ONLINE. (UTC Recency Fix Applied)");
 console.log("   /learn <fact>   |   <question>");
 
 const ask = () => {
     rl.question('\n👉 Command: ', async (input) => {
         if (input.startsWith('/learn ')) {
-            await learnFact(input.replace('/learn ', ''));
+            const fact = input.replace('/learn ', '');
+            await memorize(fact);
+            console.log("✅ Learned.");
         } else {
             console.log("🔍 Searching memory...");
             const context = await findBestContext(input);
             const contextText = (context && context.score > 0.65) ? context.text : "No relevant memory.";
             
             if (contextText !== "No relevant memory.") {
-                 console.log(`💡 Memory Found: ${(context.score * 100).toFixed(0)}% match`);
+                 console.log(`💡 Memories Found:\n${contextText}`);
             }
 
             process.stdout.write("🧠 Thinking...");
@@ -123,7 +158,7 @@ const ask = () => {
             process.stdout.write("\r");
             
             console.log("\n💬 AI RESPONSE:");
-            console.log(answer.trim());
+            console.log(answer);
         }
         ask();
     });
