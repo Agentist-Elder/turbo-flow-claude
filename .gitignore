@@ -1,0 +1,11 @@
+# Ignored Folders
+**/target/
+**/model/
+**/node_modules/
+.devcontainer/
+dist/
+
+# Ignored Files
+**/*.rs.bk
+*.log
+.DS_Store

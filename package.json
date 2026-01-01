@@ -1,0 +1,27 @@
+{
+  "name": "turbo-flow-claude",
+  "version": "1.0.0",
+  "description": "**Advanced Agentic Development Environment**   *DevPods • GitHub Codespaces • Google Cloud Shell*",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Agentist-Elder/turbo-flow-claude.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/Agentist-Elder/turbo-flow-claude/issues"
+  },
+  "homepage": "https://github.com/Agentist-Elder/turbo-flow-claude#readme",
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "typescript": "^5.9.3"
+  }
+}
