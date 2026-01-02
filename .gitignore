@@ -14,3 +14,4 @@ node_modules/
 aimds-rust/target/
 aimds-rust/index.node
 *.db
+agents/researcher-agent/node_modules/

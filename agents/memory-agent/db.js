@@ -1,53 +1,68 @@
 const sqlite3 = require('sqlite3').verbose();
-const { open } = require('sqlite');
+const path = require('path'); // Import path module
 
-let db;
+// FIX: Always locate memories.db in THIS folder, not where the command is run from
+const dbPath = path.join(__dirname, 'memories.db');
+const db = new sqlite3.Database(dbPath);
 
-async function initDB() {
-    if (db) return db;
-    db = await open({
-        filename: './memories.db',
-        driver: sqlite3.Database
-    });
-
-    // CRITICAL: We enable the 384-dimension schema for BERT
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS memories (
+function initDB() {
+    db.serialize(() => {
+        db.run(`CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             text TEXT,
             vector BLOB,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-    `);
-    return db;
+        )`);
+    });
 }
 
-async function addMemory(text, vector) {
-    const db = await initDB();
-    
-    // Safety Check: Ensure vector is a valid array
-    if (!Array.isArray(vector) || vector.length !== 384) {
-        console.error(`   ⚠️  VECTOR SIZE MISMATCH! Expected 384, got ${vector ? vector.length : 'undefined'}`);
-        // We throw to ensure the agent knows it failed
-        throw new Error("Vector dimension mismatch");
-    }
+// Convert Float32Array to Buffer (BLOB) for storage
+function float32ToBuffer(floatArray) {
+    return Buffer.from(floatArray.buffer);
+}
 
-    // SQLite stores vectors as JSON text or Blobs. 
-    // For simplicity without sqlite-vss extensions, we verify it fits.
-    await db.run(
-        'INSERT INTO memories (text, vector) VALUES (?, ?)',
-        text,
-        JSON.stringify(vector)
+// Convert Buffer (BLOB) back to Float32Array
+function bufferToFloat32(buffer) {
+    return new Float32Array(
+        buffer.buffer,
+        buffer.byteOffset,
+        buffer.byteLength / 4
     );
 }
 
-async function getAllMemories() {
-    const db = await initDB();
-    const rows = await db.all('SELECT * FROM memories');
-    return rows.map(row => ({
-        ...row,
-        vector: JSON.parse(row.vector) // Parse back to array
-    }));
+function addMemory(text, vector) {
+    return new Promise((resolve, reject) => {
+        const stmt = db.prepare("INSERT INTO memories (text, vector) VALUES (?, ?)");
+        const vectorBlob = float32ToBuffer(vector);
+        
+        stmt.run(text, vectorBlob, function(err) {
+            if (err) reject(err);
+            else resolve(this.lastID);
+        });
+        stmt.finalize();
+    });
 }
 
-module.exports = { addMemory, getAllMemories };
+function getAllMemories() {
+    return new Promise((resolve, reject) => {
+        db.all("SELECT * FROM memories", (err, rows) => {
+            if (err) {
+                reject(err);
+            } else {
+                const results = rows.map(row => ({
+                    ...row,
+                    vector: bufferToFloat32(row.vector)
+                }));
+                resolve(results);
+            }
+        });
+    });
+}
+
+// Initialize on load
+initDB();
+
+module.exports = {
+    addMemory,
+    getAllMemories
+};
