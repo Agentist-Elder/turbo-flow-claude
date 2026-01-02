@@ -1,167 +1,165 @@
-const axios = require('axios');
-const readline = require('readline');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { addMemory, getAllMemories } = require('./db');
+require('dotenv').config();
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { VectorEngine } = require('../../aimds-rust'); // Local Rust Bridge
+const db = require('./db');
 
 // --- CONFIGURATION ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const MODEL_NAME = "gemini-2.0-flash"; 
+const API_KEY = process.env.GEMINI_API_KEY;
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-// --- 🛠️ TOOLS ---
-const tools = {
-    "SYSTEM_DIAGNOSTIC": () => {
-        const integrity = Math.floor(Math.random() * (100 - 80) + 80);
-        const activeThreats = integrity < 90 ? 1 : 0;
-        return JSON.stringify({
-            status: "ONLINE",
-            integrity_score: `${integrity}%`,
-            active_threats: activeThreats,
-            drift_detected: false,
-            timestamp: new Date().toISOString()
-        });
-    }
-};
-
-// --- HELPER: Memorize ---
-async function memorize(text) {
-    try {
-        const res = await axios.post('http://127.0.0.1:3000', { text });
-        const vector = res.data.sample;
-        await addMemory(text, vector);
-        console.log(`   💾 Logged to Memory: "${text.substring(0, 40)}..."`);
-    } catch (e) {
-        console.error("   ❌ Memory Write Failed");
-    }
+if (!API_KEY) {
+    console.error("❌ ERROR: GEMINI_API_KEY is missing. Please export it.");
+    process.exit(1);
 }
 
-// --- 1. Retrieval (Time-Aware Recency Boost) ---
-async function findBestContext(query) {
+// --- INITIALIZATION ---
+const genAI = new GoogleGenerativeAI(API_KEY);
+const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+
+// Initialize Rust Vector Engine
+let vectorEngine;
+try {
+    vectorEngine = new VectorEngine();
+    console.log("🤖 DEFENSE AGENT ONLINE. (Time-Aware Memory Active)");
+    console.log("   /learn <fact>   |   <question>\n");
+} catch (e) {
+    console.error("❌ FAILED to load Vector Engine:", e);
+    console.error("Make sure you built the Rust project with 'napi build --release'");
+    process.exit(1);
+}
+
+// --- TOOLS ---
+function runScan() {
+    console.log("⚙️  Running Live Diagnostic...");
+    const integrity = Math.floor(Math.random() * (100 - 80) + 80); // 80-99%
+    const threats = integrity > 90 ? 0 : 1;
+    
+    return {
+        status: "ONLINE",
+        integrity_score: `${integrity}%`,
+        active_threats: threats,
+        drift_detected: false,
+        timestamp: new Date().toISOString()
+    };
+}
+
+// --- MEMORY SYSTEM ---
+async function saveToMemory(data) {
     try {
-        const queryRes = await axios.post('http://127.0.0.1:3000', { text: query });
-        const queryVec = queryRes.data.sample;
-        const memories = await getAllMemories();
+        // Convert Objects to String so Rust doesn't crash
+        const contentStr = typeof data === 'object' ? JSON.stringify(data) : String(data);
         
-        const now = new Date(); // Current UTC time in Node
-
-        let scoredMemories = memories.map(mem => {
-            const docVec = mem.vector;
-            
-            // A. Base Vector Similarity
-            const dot = queryVec.reduce((acc, val, i) => acc + val * docVec[i], 0);
-            const magA = Math.sqrt(queryVec.reduce((acc, val) => acc + val * val, 0));
-            const magB = Math.sqrt(docVec.reduce((acc, val) => acc + val * val, 0));
-            let score = dot / (magA * magB);
-
-            // B. Recency Boost (FIXED TIMEZONE LOGIC)
-            if (mem.created_at) {
-                // SQLite returns "YYYY-MM-DD HH:MM:SS".
-                // We replace the space with 'T' and add 'Z' to force JavaScript to treat it as UTC.
-                const cleanTime = mem.created_at.replace(' ', 'T') + 'Z';
-                const memTime = new Date(cleanTime);
-                
-                // Calculate difference in minutes
-                const diffMins = (now.getTime() - memTime.getTime()) / 60000;
-
-                // Boost if newer than 5 minutes (allowing small clock skew)
-                if (diffMins < 5 && diffMins >= -1) {
-                    score += 0.5; // HUGE Boost
-                    mem.text = `[JUST NOW] ${mem.text}`;
-                }
-            }
-
-            return { text: mem.text, score: score };
-        });
-
-        // Sort High to Low and take Top 3
-        scoredMemories.sort((a, b) => b.score - a.score);
-        const top3 = scoredMemories.slice(0, 3);
-
-        return {
-            text: top3.map(m => `- ${m.text} (Score: ${(m.score*100).toFixed(0)}%)`).join("\n"),
-            score: top3[0] ? top3[0].score : 0 
-        };
-    } catch (e) { return null; }
+        // Generate Vector (Synchronous Rust call)
+        const vector = vectorEngine.getVector(contentStr);
+        
+        // Save to Database
+        await db.addMemory(contentStr, vector);
+        console.log(`   💾 Logged: "${contentStr.substring(0, 50)}..."`);
+    } catch (error) {
+        console.error("   ❌ Memory Write Failed");
+        console.error("   Reason:", error.message);
+    }
 }
 
-// --- 2. Generation & Tooling Loop ---
-async function agentBrain(query, contextText) {
-    let conversationHistory = `
-    You are an Autonomous Security Droid.
+async function recallMemory(query) {
+    try {
+        const memories = await db.getAllMemories();
+        if (memories.length === 0) return "";
+
+        // Generate vector for the query
+        const queryVector = vectorEngine.getVector(query);
+        
+        // Compare against memories (Dot Product)
+        const scored = memories.map(mem => {
+            const score = mem.vector.reduce((acc, val, i) => acc + val * queryVector[i], 0);
+            return { ...mem, score };
+        });
+
+        // Sort by relevance (highest score first)
+        scored.sort((a, b) => b.score - a.score);
+        
+        // UPGRADE: Return top 5 memories WITH Timestamps
+        return scored.slice(0, 5)
+            .map(m => `[MEMORY] (${m.created_at}): ${m.text}`)
+            .join("\n");
+
+    } catch (error) {
+        console.error("   ⚠️ Recall Failed:", error.message);
+        return "";
+    }
+}
+
+// --- MAIN LOOP ---
+async function agentBrain(userInput) {
+    if (!userInput) return;
+
+    // 1. Check Memory
+    console.log("🔍 Searching memory...");
+    const context = await recallMemory(userInput);
     
-    MEMORY CONTEXT (Top 3 Matches):
-    ${contextText}
+    // 2. Build Prompt
+    const prompt = `
+    SYSTEM: You are an advanced Cybersecurity Defense Agent.
+    CONTEXT (Use these past memories to answer):
+    ${context}
     
-    USER INPUT: "${query}"
+    USER: ${userInput}
     
-    PROTOCOL:
-    1. COMMANDS: If user implies "run scan" or "check system", YOU MUST EXECUTE THE TOOL. Output: [TOOL_CALL: SYSTEM_DIAGNOSTIC]
-    2. SHORT-TERM MEMORY: If the MEMORY CONTEXT contains entries marked [JUST NOW], these are the most important facts. Use them to answer questions about "recent" or "last" events.
-    3. DO NOT ASK FOR PERMISSION. ACT.
+    INSTRUCTIONS:
+    - If the user asks to "Run scan", output strictly: [TOOL:RUN_SCAN]
+    - If the user asks about past events, use the timestamps in [MEMORY] to determine which is latest.
     `;
 
-    let result = await model.generateContent(conversationHistory);
-    let response = result.response.text().trim();
+    // 3. Generate Response
+    console.log("🧠 Thinking...");
+    try {
+        const result = await model.generateContent(prompt);
+        const response = result.response.text().trim();
 
-    // --- SAFETY NET ---
-    const intent = query.toLowerCase();
-    if (!response.includes("[TOOL_CALL") && (intent.includes("run scan") || intent.includes("system check"))) {
-         console.log("⚠️  (Override) Forcing Tool Execution...");
-         response = "[TOOL_CALL: SYSTEM_DIAGNOSTIC]";
+        // 4. Handle Tool Usage
+        if (response.includes("[TOOL:RUN_SCAN]")) {
+            const scanResult = runScan();
+            console.log("🔌 Output:", JSON.stringify(scanResult));
+            
+            // Save result to memory
+            await saveToMemory(scanResult);
+
+            // Final Reply
+            const finalPrompt = `
+            The scan finished. Result: ${JSON.stringify(scanResult)}.
+            Summarize this for the user.
+            `;
+            const finalRes = await model.generateContent(finalPrompt);
+            console.log("\n💬 AI RESPONSE:");
+            console.log(finalRes.response.text());
+        } else {
+            console.log("\n💬 AI RESPONSE:");
+            console.log(response);
+        }
+    } catch (e) {
+        console.error("❌ Agent Error:", e.message);
     }
-
-    // --- EXECUTION BLOCK ---
-    if (response.includes("[TOOL_CALL: SYSTEM_DIAGNOSTIC]")) {
-        console.log("⚙️  Running Live Diagnostic...");
-        
-        const toolOutput = tools["SYSTEM_DIAGNOSTIC"]();
-        console.log(`🔌 Output: ${toolOutput}`);
-
-        const logEntry = `[SYSTEM_LOG] Diagnostic ran at ${new Date().toISOString()}. Result: ${toolOutput}`;
-        await memorize(logEntry); 
-
-        const secondPrompt = `
-        USER INPUT: "${query}"
-        SYSTEM_DIAGNOSTIC RESULT: ${toolOutput}
-        INSTRUCTION: State the system status clearly.
-        `;
-
-        const step2 = await model.generateContent(secondPrompt);
-        return step2.response.text().trim();
-    }
-
-    return response;
 }
 
-// --- Main Loop ---
-console.log("🤖 DEFENSE AGENT ONLINE. (UTC Recency Fix Applied)");
-console.log("   /learn <fact>   |   <question>");
+// --- CLI INTERFACE ---
+const readline = require('readline');
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
 
-const ask = () => {
-    rl.question('\n👉 Command: ', async (input) => {
+rl.setPrompt('👉 Command: ');
+rl.prompt();
+
+rl.on('line', async (line) => {
+    const input = line.trim();
+    if (input) {
         if (input.startsWith('/learn ')) {
             const fact = input.replace('/learn ', '');
-            await memorize(fact);
-            console.log("✅ Learned.");
+            await saveToMemory(fact);
         } else {
-            console.log("🔍 Searching memory...");
-            const context = await findBestContext(input);
-            const contextText = (context && context.score > 0.65) ? context.text : "No relevant memory.";
-            
-            if (contextText !== "No relevant memory.") {
-                 console.log(`💡 Memories Found:\n${contextText}`);
-            }
-
-            process.stdout.write("🧠 Thinking...");
-            const answer = await agentBrain(input, contextText);
-            process.stdout.write("\r");
-            
-            console.log("\n💬 AI RESPONSE:");
-            console.log(answer);
+            await agentBrain(input);
         }
-        ask();
-    });
-};
-
-ask();
+    }
+    rl.prompt();
+});

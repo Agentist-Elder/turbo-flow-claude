@@ -9,3 +9,8 @@ dist/
 **/*.rs.bk
 *.log
 .DS_Store
+.env
+node_modules/
+aimds-rust/target/
+aimds-rust/index.node
+*.db

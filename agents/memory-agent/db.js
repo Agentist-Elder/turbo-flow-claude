@@ -1,50 +1,53 @@
 const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { open } = require('sqlite');
 
-// Connect to a file-based database
-const dbPath = path.resolve(__dirname, 'memory.sqlite');
-const db = new sqlite3.Database(dbPath);
+let db;
 
-// Initialize the Table
-db.serialize(() => {
-    db.run(`
+async function initDB() {
+    if (db) return db;
+    db = await open({
+        filename: './memories.db',
+        driver: sqlite3.Database
+    });
+
+    // CRITICAL: We enable the 384-dimension schema for BERT
+    await db.exec(`
         CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text TEXT NOT NULL,
-            vector TEXT NOT NULL,
+            text TEXT,
+            vector BLOB,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
+        );
     `);
-});
-
-// --- Helper: Save a Memory ---
-function addMemory(text, vector) {
-    return new Promise((resolve, reject) => {
-        const stmt = db.prepare("INSERT INTO memories (text, vector) VALUES (?, ?)");
-        stmt.run(text, JSON.stringify(vector), function(err) {
-            if (err) reject(err);
-            else resolve(this.lastID);
-        });
-        stmt.finalize();
-    });
+    return db;
 }
 
-// --- Helper: Get All Memories (WITH TIME) ---
-function getAllMemories() {
-    return new Promise((resolve, reject) => {
-        // We explicitly select 'created_at' now
-        db.all("SELECT text, vector, created_at FROM memories", (err, rows) => {
-            if (err) reject(err);
-            else {
-                const parsed = rows.map(row => ({
-                    text: row.text,
-                    vector: JSON.parse(row.vector),
-                    created_at: row.created_at // <--- Crucial for Recency
-                }));
-                resolve(parsed);
-            }
-        });
-    });
+async function addMemory(text, vector) {
+    const db = await initDB();
+    
+    // Safety Check: Ensure vector is a valid array
+    if (!Array.isArray(vector) || vector.length !== 384) {
+        console.error(`   ⚠️  VECTOR SIZE MISMATCH! Expected 384, got ${vector ? vector.length : 'undefined'}`);
+        // We throw to ensure the agent knows it failed
+        throw new Error("Vector dimension mismatch");
+    }
+
+    // SQLite stores vectors as JSON text or Blobs. 
+    // For simplicity without sqlite-vss extensions, we verify it fits.
+    await db.run(
+        'INSERT INTO memories (text, vector) VALUES (?, ?)',
+        text,
+        JSON.stringify(vector)
+    );
+}
+
+async function getAllMemories() {
+    const db = await initDB();
+    const rows = await db.all('SELECT * FROM memories');
+    return rows.map(row => ({
+        ...row,
+        vector: JSON.parse(row.vector) // Parse back to array
+    }));
 }
 
 module.exports = { addMemory, getAllMemories };

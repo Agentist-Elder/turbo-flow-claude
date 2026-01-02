@@ -12,7 +12,10 @@
   "type": "commonjs",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "aimds-rust": "file:../../aimds-rust",
     "axios": "^1.13.2",
+    "dotenv": "^17.2.3",
+    "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7"
   }
 }

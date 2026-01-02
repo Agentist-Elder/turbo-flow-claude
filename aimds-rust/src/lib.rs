@@ -1,50 +1,62 @@
-use anyhow::{Error as E, Result};
-use candle_core::{Device, Tensor, DType};
-use candle_nn::VarBuilder;
+use napi::bindgen_prelude::*;
+use napi_derive::napi;
+use candle_core::{Tensor, Device, DType, Module};
 use candle_transformers::models::bert::{BertModel, Config};
 use tokenizers::Tokenizer;
+use std::path::Path;
 
+#[napi]
 pub struct VectorEngine {
     model: BertModel,
     tokenizer: Tokenizer,
-    device: Device,
 }
 
+#[napi]
 impl VectorEngine {
-    pub fn new() -> Result<Self> {
-        let device = Device::Cpu;
-        println!("Loading AI Model from local './model' folder...");
+    #[napi(constructor)]
+    pub fn new(model_path: String) -> Result<Self> {
+        let config_path = format!("{}/config.json", model_path);
+        let tokenizer_path = format!("{}/tokenizer.json", model_path);
+        let weights_path = format!("{}/model.safetensors", model_path);
 
-        // 1. Define Local Paths (No Internet Needed)
-        let config_path = "model/config.json";
-        let tokenizer_path = "model/tokenizer.json";
-        let weights_path = "model/model.safetensors";
+        if !Path::new(&config_path).exists() {
+            return Err(Error::from_reason(format!("Missing config at: {}", config_path)));
+        }
 
-        // 2. Load the Components
-        let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
-        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
+        let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path).map_err(|e| Error::from_reason(e.to_string()))?).map_err(|e| Error::from_reason(e.to_string()))?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|e| Error::from_reason(e.to_string()))?;
         
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)? };
-        let model = BertModel::load(vb, &config)?;
+        let vb = unsafe { candle_nn::VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &Device::Cpu) }
+            .map_err(|e| Error::from_reason(e.to_string()))?;
+        
+        let model = BertModel::load(vb, &config).map_err(|e| Error::from_reason(e.to_string()))?;
 
-        println!("AI Model Loaded Successfully.");
-        Ok(Self { model, tokenizer, device })
+        Ok(VectorEngine { model, tokenizer })
     }
 
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        // 1. Tokenize
-        let tokens = self.tokenizer.encode(text, true).map_err(E::msg)?;
-        let token_ids = Tensor::new(tokens.get_ids(), &self.device)?.unsqueeze(0)?;
-        let token_type_ids = token_ids.zeros_like()?;
+    #[napi]
+    pub fn get_vector(&self, text: String) -> Result<Vec<f64>> {
+        let tokens = self.tokenizer.encode(text, true).map_err(|e| Error::from_reason(e.to_string()))?;
+        let token_ids = Tensor::new(tokens.get_ids(), &Device::Cpu)
+            .map_err(|e| Error::from_reason(e.to_string()))?
+            .unsqueeze(0)
+            .map_err(|e| Error::from_reason(e.to_string()))?;
+        
+        let token_type_ids = token_ids.zeros_like().map_err(|e| Error::from_reason(e.to_string()))?;
 
-        // 2. Inference
-        let embeddings = self.model.forward(&token_ids, &token_type_ids)?;
+        let embeddings = self.model.forward(&token_ids, &token_type_ids)
+            .map_err(|e| Error::from_reason(e.to_string()))?;
         
-        // 3. Mean Pooling
-        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
-        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
-        let embeddings = embeddings.flatten_all()?;
+        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3().map_err(|e| Error::from_reason(e.to_string()))?;
         
-        Ok(embeddings.to_vec1()?)
+        let pooled = (embeddings.sum(1).map_err(|e| Error::from_reason(e.to_string()))? / (n_tokens as f64)).map_err(|e| Error::from_reason(e.to_string()))?;
+        
+        // The Fix: Convert F32 -> F64 before returning
+        let final_vec = pooled
+            .to_dtype(DType::F64).map_err(|e| Error::from_reason(e.to_string()))?
+            .flatten_all().map_err(|e| Error::from_reason(e.to_string()))?
+            .to_vec1::<f64>().map_err(|e| Error::from_reason(e.to_string()))?;
+
+        Ok(final_vec)
     }
 }

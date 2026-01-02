@@ -1,0 +1,11 @@
+{
+  "name": "aimds-rust",
+  "version": "1.0.0",
+  "description": "Rust-powered vector engine for AI agents",
+  "main": "index.js",
+  "napi": {
+    "name": "aimds-rust"
+  },
+  "license": "ISC",
+  "type": "commonjs"
+}
