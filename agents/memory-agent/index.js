@@ -1,7 +1,8 @@
-require('dotenv').config();
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { VectorEngine } = require('../../aimds-rust'); // Local Rust Bridge
-const db = require('./db');
+import dotenv from 'dotenv';
+dotenv.config();
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { VectorEngine } from '../../aimds-rust/index.js'; // Local Rust Bridge
+import * as db from './db.js';
 
 // --- CONFIGURATION ---
 const MODEL_NAME = "gemini-2.0-flash"; 
@@ -142,7 +143,7 @@ async function agentBrain(userInput) {
 }
 
 // --- CLI INTERFACE ---
-const readline = require('readline');
+import readline from 'readline';
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout

@@ -1,5 +1,5 @@
-const axios = require('axios');
-const { addMemory } = require('./db');
+import axios from 'axios';
+import { addMemory } from './db.js';
 
 const initialFacts = [
     "The sky is usually blue during the day due to Rayleigh scattering.",

@@ -1,44 +1,59 @@
-require('dotenv').config({ path: '../../.env' });
-const { VectorEngine } = require('../../aimds-rust');
-const db = require('./db');
+import * as db from './db.js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-let vectorEngine = null;
+// Reuse the API key from the environment
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "embedding-001" });
 
-async function init() {
-    if (!vectorEngine) {
-        try {
-            vectorEngine = new VectorEngine();
-        } catch (e) {
-            console.error("   [Memory-Agent] Brain Error:", e);
-        }
-    }
+async function getEmbedding(text) {
+    const result = await model.embedContent(text);
+    return result.embedding.values;
+}
+
+// Euclidean Distance (Vector Math)
+function euclideanDistance(a, b) {
+    return Math.sqrt(a.reduce((sum, val, i) => sum + Math.pow(val - b[i], 2), 0));
 }
 
 async function handle(task, input) {
-    await init();
+    try {
+        // --- EXISTING MEMORY TASKS ---
+        if (task === 'LEARN') {
+            const vector = await getEmbedding(input);
+            await db.addMemory(input, vector);
+            return "Memory Saved.";
+        }
+        
+        if (task === 'RECALL') {
+            const queryVector = await getEmbedding(input);
+            const allMemories = await db.getAllMemories();
+            if (allMemories.length === 0) return "No memories found.";
 
-    if (task === 'LEARN') {
-        const str = typeof input === 'object' ? JSON.stringify(input) : String(input);
-        const vector = vectorEngine.getVector(str);
-        await db.addMemory(str, vector);
-        return { status: "success", message: "Memory saved." };
+            const scored = allMemories.map(m => ({
+                text: m.text,
+                score: euclideanDistance(queryVector, m.vector)
+            })).sort((a, b) => a.score - b.score);
+
+            return scored.slice(0, 3).map(m => m.text).join("\n");
+        }
+
+        // --- NEW IMMUNITY TASKS ---
+        if (task === 'CHECK_IMMUNITY') {
+            return await db.checkImmunity(input);
+        }
+
+        if (task === 'ADD_SIGNATURE') {
+            return await db.addSignature(input.pattern, input.vector, input.score, input.action);
+        }
+
+        if (task === 'GET_EMBEDDING') {
+            return await getEmbedding(input);
+        }
+
+        return "Unknown Memory Task";
+    } catch (e) {
+        return `Memory Error: ${e.message}`;
     }
-
-    if (task === 'RECALL') {
-        const memories = await db.getAllMemories();
-        if (memories.length === 0) return "No memories found.";
-
-        const queryVector = vectorEngine.getVector(input);
-        const scored = memories.map(mem => {
-            const score = mem.vector.reduce((acc, val, i) => acc + val * queryVector[i], 0);
-            return { ...mem, score };
-        });
-        scored.sort((a, b) => b.score - a.score);
-
-        // Return top 3 results
-        return scored.slice(0, 3).map(m => `[${m.created_at}]: ${m.text}`).join("\n");
-    }
-    return { error: "Unknown task" };
 }
 
-module.exports = { handle };
+export default { handle };
