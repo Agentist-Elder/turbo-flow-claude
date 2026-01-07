@@ -12,3 +12,4 @@
 
 # Keep the claude.md configuration
 !/claude.md
+.env
