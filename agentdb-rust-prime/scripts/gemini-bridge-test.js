@@ -25,7 +25,7 @@ class PolyglotManager {
       throw new Error('GEMINI_API_KEY environment variable is required');
     }
     this.genAI = new GoogleGenerativeAI(apiKey);
-    this.workerModel = process.env.CLAUDE_FLOW_MODEL || 'gemini-2.0-flash'; // Worker model as specified in mission
+    this.workerModel = process.env.WORKER_MODEL || 'gemini-2.5-flash';
   }
 
   /**
