@@ -1,0 +1,15 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `agentdb-rust-prime/target/debug/agentdb-rust-prime`
+--------------------------------------------------
+🛡️  AIMDS STARTUP: AIMDS-RECURSIVE-v1.0
+📜  HONESTY CONTRACT: ACTIVE
+    - Mode: Recursive Learning (No LLM Seeds)
+    - Heuristics: Entropy & Velocity
+    - TTD Benchmark: London Protocol (High-Precision)
+--------------------------------------------------
+👀 SENSOR AGENT: Hooked to Kernel File Events (Recursive)
+☢️  [TTD: 139.38µs] LONDON REPORT: High Entropy (7.9814)
+⚡ [TTD: 1.28µs] BLOCKED (Memory): /workspaces/turbo-flow-claude/./agentdb-rust-prime/london_attack.bin
+⚡ [TTD: 531.00ns] BLOCKED (Memory): /workspaces/turbo-flow-claude/./agentdb-rust-prime/london_attack.bin
+⚡ [TTD: 1.99µs] BLOCKED (Memory): /workspaces/turbo-flow-claude/./agentdb-rust-prime/london_attack.bin
+⚡ [TTD: 1.51µs] BLOCKED (Memory): /workspaces/turbo-flow-claude/./agentdb-rust-prime/london_attack.bin

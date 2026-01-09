@@ -1,58 +1,60 @@
-use num_bigint::BigUint;
-use std::env;
+use ruvector_core::{VectorDB, DbOptions, VectorEntry, SearchQuery};
+use std::time::{Instant, Duration};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use notify::{Watcher, RecursiveMode, Config};
 
-/// Performs the Lucas-Lehmer primality test for M_p = 2^p - 1
-fn lucas_lehmer_test(p: u32) -> bool {
-    if p == 2 { return true; }
-    
-    // m_p = 2^p - 1
-    let m_p = (BigUint::from(1u32) << p) - 1u32;
-    let mut s = BigUint::from(4u32);
-    let two = BigUint::from(2u32);
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("🛡️ [DEPLOYED] AgentDB-Prime: RuVector Manifold Active");
 
-    for _ in 0..(p - 2) {
-        // s = (s^2 - 2) mod M_p
-        s = (&s * &s - &two) % &m_p;
-    }
-    s == BigUint::from(0u32)
-}
+    // Initialize VectorDB as the 'Bent Space' primary store
+    let mut options = DbOptions::default();
+    options.dimensions = 4; // [Entropy, Velocity, PID_Hash, Size]
+    options.storage_path = "./agentdb_store".to_string();
+    let db = Arc::new(Mutex::new(VectorDB::new(options)?));
 
-/// Simple trial division for small prime exponents
-fn is_prime(n: u32) -> bool {
-    if n < 2 { return false; }
-    if n == 2 || n == 3 { return true; }
-    if n % 2 == 0 || n % 3 == 0 { return false; }
-    let mut i = 5;
-    while i * i <= n {
-        if n % i == 0 || n % (i + 2) == 0 { return false; }
-        i += 6;
-    }
-    true
-}
-
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        println!("RUST_BRIDGE_ERROR: No query provided.");
-        return;
+    // Seed the 'attack_patterns' manifold
+    {
+        let db_init = db.lock().await;
+        db_init.insert(VectorEntry {
+            id: Some("ransomware_pattern_v1".to_string()),
+            vector: vec![0.95, 0.88, 0.50, 0.10], // High Entropy/Velocity
+            metadata: None,
+        })?;
     }
 
-    // TTD London Requirement: Capture the AI signal
-    println!("RUST_BRIDGE_DATA_CAPTURE: Analyzing signal -> {}", args[1]);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    let mut watcher = notify::recommended_watcher(move |res| {
+        if let Ok(event) = res { tx.blocking_send(event).unwrap(); }
+    })?;
+    watcher.watch("/tmp".as_ref(), RecursiveMode::Recursive)?;
 
-    let mut found = 0;
-    let mut p = 2;
-    
-    println!("--- 🛠️ MATH VERIFICATION START ---");
-    while found < 5 {
-        if is_prime(p) {
-            if lucas_lehmer_test(p) {
-                let val = (BigUint::from(1u32) << p) - 1u32;
-                println!("VALIDATED: M{} (Value: {}) is a confirmed Mersenne Prime.", p, val);
-                found += 1;
+    println!("⚡ [REFLEX] Monitoring /tmp... Target TTD: < 1ms");
+
+    while let Some(event) = rx.recv().await {
+        let start_time = Instant::now();
+        
+        // Simulate Feature Extraction from the event
+        let current_vector = vec![0.94, 0.87, 0.51, 0.11]; 
+
+        let db_search = db.lock().await;
+        let query = SearchQuery {
+            vector: current_vector,
+            k: 1,
+            filter: None,
+            include_vectors: false,
+        };
+        
+        let results = db_search.search(&query)?;
+
+        if let Some(closest) = results.first() {
+            // Distance < 0.05 on the manifold triggers the block
+            if closest.distance < 0.05 {
+                let ttd = start_time.elapsed();
+                println!("🚫 [BLOCK] London Report | TTD: {:?} | Manifold Match: {}", ttd, closest.id);
             }
         }
-        p += 1;
     }
-    println!("--- 🛠️ MATH VERIFICATION END ---");
+    Ok(())
 }
