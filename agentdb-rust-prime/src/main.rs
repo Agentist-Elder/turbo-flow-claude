@@ -1,59 +1,39 @@
-use ruvector_core::{VectorDB, DbOptions, VectorEntry, SearchQuery};
-use std::time::{Instant, Duration};
+use std::time::Instant;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use notify::{Watcher, RecursiveMode, Config};
+use notify::{Watcher, RecursiveMode};
+
+// Mock structures to allow compilation without the broken ruvector crate
+struct MockResult { id: String, score: f32 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🛡️ [DEPLOYED] AgentDB-Prime: RuVector Manifold Active");
+    println!("🛡️ [DEPLOYED] AgentDB-Prime: Static Logic Active (Mock Mode)");
 
-    // Initialize VectorDB as the 'Bent Space' primary store
-    let mut options = DbOptions::default();
-    options.dimensions = 4; // [Entropy, Velocity, PID_Hash, Size]
-    options.storage_path = "./agentdb_store".to_string();
-    let db = Arc::new(Mutex::new(VectorDB::new(options)?));
-
-    // Seed the 'attack_patterns' manifold
-    {
-        let db_init = db.lock().await;
-        db_init.insert(VectorEntry {
-            id: Some("ransomware_pattern_v1".to_string()),
-            vector: vec![0.95, 0.88, 0.50, 0.10], // High Entropy/Velocity
-            metadata: None,
-        })?;
-    }
+    // We keep the architecture, but bypass the physical DB file for now
+    let db_mock = Arc::new(Mutex::new(vec!["ransomware_pattern_v1"]));
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
     let mut watcher = notify::recommended_watcher(move |res| {
-        if let Ok(event) = res { tx.blocking_send(event).unwrap(); }
+        if let Ok(event) = res { let _ = tx.blocking_send(event); }
     })?;
+    
+    // Monitoring /tmp as per your original design
     watcher.watch("/tmp".as_ref(), RecursiveMode::Recursive)?;
 
-    println!("⚡ [REFLEX] Monitoring /tmp... Target TTD: < 1ms");
+    println!("⚡ [REFLEX] Monitoring /tmp... (Static Analysis Active)");
 
     while let Some(event) = rx.recv().await {
         let start_time = Instant::now();
         
-        // Simulate Feature Extraction from the event
-        let current_vector = vec![0.94, 0.87, 0.51, 0.11]; 
-
-        let db_search = db.lock().await;
-        let query = SearchQuery {
-            vector: current_vector,
-            k: 1,
-            filter: None,
-            include_vectors: false,
-        };
+        // Simulating the "Attack Pattern" detection logic
+        // In the final version, this will be replaced by your external Ruvector repo results
+        let event_path = format!("{:?}", event.paths);
         
-        let results = db_search.search(&query)?;
-
-        if let Some(closest) = results.first() {
-            // Distance < 0.05 on the manifold triggers the block
-            if closest.distance < 0.05 {
-                let ttd = start_time.elapsed();
-                println!("🚫 [BLOCK] London Report | TTD: {:?} | Manifold Match: {}", ttd, closest.id);
-            }
+        // STATIC HEURISTIC: If the file path contains 'attack', we trigger a block
+        if event_path.contains("attack") || event_path.contains("secret") {
+            let ttd = start_time.elapsed();
+            println!("🚫 [BLOCK] London Report | TTD: {:?} | Static Match: alert_pattern_v1", ttd);
         }
     }
     Ok(())
