@@ -13,3 +13,4 @@
 # Keep the claude.md configuration
 !/claude.md
 .envtarget/
+agentdb-rust-prime/target/
