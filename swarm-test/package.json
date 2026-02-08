@@ -1,0 +1,12 @@
+{
+  "name": "swarm-test",
+  "version": "1.0.0",
+  "description": "A basic Hello World Node.js project.",
+  "main": "app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "author": "",
+  "license": "ISC"
+}

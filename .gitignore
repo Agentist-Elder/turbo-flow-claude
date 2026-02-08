@@ -12,5 +12,7 @@
 
 # Keep the claude.md configuration
 !/claude.md
-.envtarget/
+target/
 agentdb-rust-prime/target/
+node_modules/
+.swarm/memory.db
