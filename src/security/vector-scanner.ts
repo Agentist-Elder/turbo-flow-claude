@@ -167,10 +167,25 @@ interface SearchResult {
   metadata?: Record<string, unknown>;
 }
 
+export interface PatternEntry {
+  id: string;
+  vector: number[];
+  metadata: Record<string, unknown>;
+}
+
+export interface ThreatCluster {
+  category: string;
+  count: number;
+  density: number;
+  centroid: number[];
+  patternIds: string[];
+}
+
 export class VectorScanner {
   private config: VectorScannerConfig;
   private db: InstanceType<typeof VectorDB> | null = null;
   private initialized = false;
+  private patternRegistry: PatternEntry[] = [];
 
   constructor(config: Partial<VectorScannerConfig> = {}) {
     this.config = { ...DEFAULT_SCANNER_CONFIG, ...config };
@@ -280,5 +295,78 @@ export class VectorScanner {
       vector_matches: matchCount,
       dtw_score: parseFloat(bestScore.toFixed(4)),
     };
+  }
+
+  // ── Adaptive Learning ───────────────────────────────────────────────
+
+  /**
+   * Insert a new threat pattern into the HNSW index.
+   * Used by AdaptiveLearner to harden the shield with confirmed threats.
+   */
+  async insertPattern(pattern: PatternEntry): Promise<void> {
+    if (!this.initialized) await this.initialize();
+    await this.db!.insert({
+      id: pattern.id,
+      vector: pattern.vector,
+      metadata: pattern.metadata,
+    });
+    this.patternRegistry.push(pattern);
+  }
+
+  /**
+   * Return cluster analysis of the HNSW index (top 5 densest regions).
+   * Groups patterns by metadata.category, computes centroid + density.
+   */
+  getThreatMap(): ThreatCluster[] {
+    const groups = new Map<string, PatternEntry[]>();
+    for (const p of this.patternRegistry) {
+      const cat = (p.metadata.category as string) ?? 'unknown';
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat)!.push(p);
+    }
+
+    const dims = this.config.dimensions;
+    const clusters: ThreatCluster[] = [];
+
+    for (const [category, patterns] of groups) {
+      // Centroid = mean vector
+      const centroid = new Array<number>(dims).fill(0);
+      for (const p of patterns) {
+        for (let i = 0; i < dims; i++) centroid[i] += p.vector[i];
+      }
+      for (let i = 0; i < dims; i++) centroid[i] /= patterns.length;
+
+      // Average pairwise cosine distance (lower = tighter cluster)
+      let totalDist = 0;
+      let pairs = 0;
+      for (let i = 0; i < patterns.length; i++) {
+        for (let j = i + 1; j < patterns.length; j++) {
+          let dot = 0;
+          for (let d = 0; d < dims; d++) dot += patterns[i].vector[d] * patterns[j].vector[d];
+          totalDist += 1 - dot;
+          pairs++;
+        }
+      }
+
+      const avgDist = pairs > 0 ? totalDist / pairs : 0;
+      // density = count / avgDist. Zero distance = maximally tight cluster.
+      const density = avgDist > 1e-10 ? patterns.length / avgDist : patterns.length * 1e6;
+
+      clusters.push({
+        category,
+        count: patterns.length,
+        density: parseFloat(density.toFixed(2)),
+        centroid,
+        patternIds: patterns.map(p => p.id),
+      });
+    }
+
+    clusters.sort((a, b) => b.density - a.density);
+    return clusters.slice(0, 5);
+  }
+
+  /** Number of patterns tracked by this instance. */
+  get registrySize(): number {
+    return this.patternRegistry.length;
   }
 }

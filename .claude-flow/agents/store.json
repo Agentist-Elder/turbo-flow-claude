@@ -1,0 +1,27 @@
+{
+  "agents": {
+    "ruvbot-architect": {
+      "agentId": "ruvbot-architect",
+      "agentType": "architect",
+      "status": "idle",
+      "health": 1,
+      "taskCount": 0,
+      "config": {},
+      "createdAt": "2026-02-09T20:24:01.290Z",
+      "model": "opus",
+      "modelRoutedBy": "router"
+    },
+    "ruvbot-worker": {
+      "agentId": "ruvbot-worker",
+      "agentType": "worker",
+      "status": "idle",
+      "health": 1,
+      "taskCount": 0,
+      "config": {},
+      "createdAt": "2026-02-09T20:24:01.450Z",
+      "model": "sonnet",
+      "modelRoutedBy": "router"
+    }
+  },
+  "version": "3.0.0"
+}

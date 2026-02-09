@@ -2,6 +2,12 @@
   "type": "module",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "dotenv": "^17.2.4"
+    "dotenv": "^17.2.4",
+    "ruvector": "^0.1.96"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   }
 }
