@@ -5,8 +5,8 @@ version: "3.0.0"
 
 swarm:
   topology: hierarchical-mesh
-  maxAgents: 15
-  autoScale: true
+  maxAgents: 7
+  autoScale: false
   coordinationStrategy: consensus
 
 memory:
@@ -35,9 +35,16 @@ neural:
   modelPath: .claude-flow/neural
 
 hooks:
-  enabled: true
-  autoExecute: true
+  enabled: false
+  autoExecute: false
 
 mcp:
   autoStart: false
   port: 3000
+
+roles:
+  coordinator: 1
+  architect: 1
+  coder: 3
+  tester: 1
+  reviewer: 1

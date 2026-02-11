@@ -1,0 +1,1 @@
+Mission: Audit the /src/security directory. Verify that mcp-transport.ts correctly implements the L3 fail-CLOSED invariant. Explain how it handles errors to the user. Use the pal-bridge (Gemini) for all reasoning.
