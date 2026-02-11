@@ -1,0 +1,69 @@
+{
+  "tasks": {
+    "task-1770782487284-jo815p": {
+      "taskId": "task-1770782487284-jo815p",
+      "type": "feature",
+      "description": "TASK 1: Install @modelcontextprotocol/sdk as direct dependency. Run: npm install @modelcontextprotocol/sdk --save",
+      "priority": "critical",
+      "status": "pending",
+      "progress": 0,
+      "assignedTo": [],
+      "tags": [
+        "phase8",
+        "setup"
+      ],
+      "createdAt": "2026-02-11T04:01:27.284Z",
+      "startedAt": null,
+      "completedAt": null
+    },
+    "task-1770782487343-txbb5s": {
+      "taskId": "task-1770782487343-txbb5s",
+      "type": "feature",
+      "description": "TASK 2: Create src/security/mcp-transport.ts. MCPTransportAdapter class using @modelcontextprotocol/sdk Client + StdioClientTransport. Constructor takes { command, args, env }. connect() spawns MCP server via StdioClientTransport, creates Client, calls client.connect(). callTool(toolName, args) maps short names to full MCP names by prepending \"mcp__claude-flow__\" prefix, calls this.client.callTool({ name, arguments: args }), returns result.content parsed. MUST satisfy type: (toolName: string, args: Record&lt;string, unknown&gt;) => Promise&lt;unknown&gt;. NO try/catch — errors propagate for L3 fail-CLOSED. disconnect() calls client.close(). Export factory createClaudeFlowTransport() that reads .mcp.json, extracts mcpServers[\"claude-flow\"] config, creates adapter, connects, returns it. Import MCPToolCaller type from ./live-mcp-client.js. Reference: /workspaces/turbo-flow-claude/src/security/live-mcp-client.ts and /workspaces/turbo-flow-claude/.mcp.json",
+      "priority": "critical",
+      "status": "pending",
+      "progress": 0,
+      "assignedTo": [],
+      "tags": [
+        "phase8",
+        "transport"
+      ],
+      "createdAt": "2026-02-11T04:01:27.343Z",
+      "startedAt": null,
+      "completedAt": null
+    },
+    "task-1770782487447-sp8qu2": {
+      "taskId": "task-1770782487447-sp8qu2",
+      "type": "feature",
+      "description": "TASK 3: Update src/main.ts lines 261-265. Replace placeholder callTool with: const adapter = await createClaudeFlowTransport(); const callTool: MCPToolCaller = adapter.callTool.bind(adapter); Add import at top: import { createClaudeFlowTransport } from './security/mcp-transport.js'; Add after orchestrator.shutdown() near line 349: await adapter.disconnect(); Reference: /workspaces/turbo-flow-claude/src/main.ts",
+      "priority": "high",
+      "status": "pending",
+      "progress": 0,
+      "assignedTo": [],
+      "tags": [
+        "phase8",
+        "wiring"
+      ],
+      "createdAt": "2026-02-11T04:01:27.447Z",
+      "startedAt": null,
+      "completedAt": null
+    },
+    "task-1770782487579-4qsd39": {
+      "taskId": "task-1770782487579-4qsd39",
+      "type": "feature",
+      "description": "TASK 4: Update tests/integration/first-flight-live.spec.ts. Add new describe block \"First Flight LIVE Run (Phase 8)\" that imports firstFlightLive, calls it, asserts log.totalDispatches >= 2, log.totalBlocked >= 1, log.elapsedMs > 0, timeout 30000ms, prints summary table. Keep existing test. Reference: /workspaces/turbo-flow-claude/tests/integration/first-flight-live.spec.ts",
+      "priority": "high",
+      "status": "pending",
+      "progress": 0,
+      "assignedTo": [],
+      "tags": [
+        "phase8",
+        "testing"
+      ],
+      "createdAt": "2026-02-11T04:01:27.579Z",
+      "startedAt": null,
+      "completedAt": null
+    }
+  },
+  "version": "3.0.0"
+}

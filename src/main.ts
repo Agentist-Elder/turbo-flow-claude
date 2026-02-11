@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto';
 import { performance } from 'perf_hooks';
 import { AIDefenceCoordinator, MockMCPClient, ThreatLevel } from './security/coordinator.js';
 import { NeuralLiveMCPClient, type MCPToolCaller } from './security/live-mcp-client.js';
+import { createClaudeFlowTransport } from './security/mcp-transport.js';
 import { VectorScanner } from './security/vector-scanner.js';
 import {
   SwarmOrchestrator,
@@ -258,11 +259,9 @@ export async function firstFlightLive(): Promise<FlightLog> {
     elapsedMs: 0,
   };
 
-  // Phase 8 placeholder — MCP transport not yet connected
-  const callTool: MCPToolCaller = async (toolName: string, args: Record<string, unknown>) => {
-    console.log(`[LiveMCP] Calling ${toolName}`, JSON.stringify(args).slice(0, 100));
-    throw new Error(`MCP tool ${toolName} not yet connected — Phase 8 pending`);
-  };
+  // Phase 8: Real MCP transport via @modelcontextprotocol/sdk
+  const adapter = await createClaudeFlowTransport();
+  const callTool: MCPToolCaller = adapter.callTool.bind(adapter);
 
   // 1. Initialize Neural Shield (HNSW + VectorScanner)
   const scanner = new VectorScanner({
@@ -347,5 +346,6 @@ export async function firstFlightLive(): Promise<FlightLog> {
   console.log(`  Elapsed: ${log.elapsedMs.toFixed(2)}ms`);
 
   await orchestrator.shutdown();
+  await adapter.disconnect();
   return log;
 }

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { firstFlight, type FlightLog } from '../../src/main.js';
+import { firstFlight, firstFlightLive, type FlightLog } from '../../src/main.js';
 
 describe('First Flight LIVE Run', () => {
   it('executes the full pipeline and prints the flight log', async () => {
@@ -36,4 +36,29 @@ describe('First Flight LIVE Run', () => {
     console.log('│  Handoff 4: worker -> architect    BLOCKED   │');
     console.log('└──────────────────────────────────────────────┘');
   });
+});
+
+describe('First Flight LIVE Run (Phase 8)', () => {
+  it('executes the live MCP pipeline with real transport', async () => {
+    const log: FlightLog = await firstFlightLive();
+
+    // Phase 8: real MCP transport — at least 2 dispatches, 1 blocked
+    expect(log.totalDispatches).toBeGreaterThanOrEqual(2);
+    expect(log.totalBlocked).toBeGreaterThanOrEqual(1);
+    expect(log.elapsedMs).toBeGreaterThan(0);
+
+    // Print summary
+    console.log('\n┌──────────────────────────────────────────────┐');
+    console.log('│     FIRST FLIGHT LIVE (Phase 8) — COMPLETE    │');
+    console.log('├──────────────────────────────────────────────┤');
+    console.log(`│  Dispatches:     ${log.totalDispatches}                          │`);
+    console.log(`│  Delivered:      ${log.handoffs.length}                          │`);
+    console.log(`│  Blocked:        ${log.totalBlocked}                          │`);
+    console.log(`│  Total Time:     ${log.elapsedMs.toFixed(2)}ms               │`);
+    console.log('├──────────────────────────────────────────────┤');
+    console.log('│  Transport:      MCP SDK (stdio)             │');
+    console.log('│  Neural Shield:  HNSW + VectorScanner        │');
+    console.log('│  L3 Invariant:   fail-CLOSED enforced        │');
+    console.log('└──────────────────────────────────────────────┘');
+  }, 30_000);
 });

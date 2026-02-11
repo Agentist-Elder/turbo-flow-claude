@@ -1,0 +1,79 @@
+Phase 8: MCP Transport Bridge for RuvBot Swarm.
+
+Replace the placeholder callTool in src/main.ts firstFlightLive() (lines 261-265) with a real MCP transport adapter using @modelcontextprotocol/sdk (v1.26.0, already in node_modules as transitive dep).
+
+AGENT STRATEGY:
+- Use gemini-3-pro-preview for architecture planning
+- Use gemini-2.5-flash for all code generation and review
+- Working directory: /workspaces/turbo-flow-claude
+
+TASKS (execute in order):
+
+TASK 1 - Install SDK:
+Run: npm install @modelcontextprotocol/sdk --save
+
+TASK 2 - Create src/security/mcp-transport.ts:
+New file. MCPTransportAdapter class that:
+- Uses @modelcontextprotocol/sdk Client + StdioClientTransport
+- Constructor takes { command: string, args: string[], env: Record<string,string> }
+- connect() spawns MCP server child process via StdioClientTransport, creates Client, calls client.connect()
+- callTool(toolName, args) maps short names to full MCP names by prepending "mcp__claude-flow__" prefix, calls this.client.callTool({ name, arguments: args }), returns result.content parsed. MUST satisfy type: (toolName: string, args: Record<string, unknown>) => Promise<unknown>. NO try/catch — errors propagate for L3 fail-CLOSED safety.
+- disconnect() calls client.close()
+- Export factory: createClaudeFlowTransport() reads .mcp.json, extracts mcpServers["claude-flow"] config, creates adapter, connects, returns it.
+- Import MCPToolCaller type from ./live-mcp-client.js
+
+Reference files:
+- /workspaces/turbo-flow-claude/src/security/live-mcp-client.ts (MCPToolCaller type at line 29, LiveMCPClient, NeuralLiveMCPClient)
+- /workspaces/turbo-flow-claude/.mcp.json (server config: command "npx", args ["@claude-flow/cli@latest","mcp","start"], env CLAUDE_FLOW_MODE=v3 etc.)
+
+TASK 3 - Update src/main.ts:
+Edit lines 261-265 only. Replace the placeholder:
+  // Phase 8 placeholder — MCP transport not yet connected
+  const callTool: MCPToolCaller = async (toolName: string, args: Record<string, unknown>) => {
+    console.log(`[LiveMCP] Calling ${toolName}`, JSON.stringify(args).slice(0, 100));
+    throw new Error(`MCP tool ${toolName} not yet connected — Phase 8 pending`);
+  };
+With:
+  const adapter = await createClaudeFlowTransport();
+  const callTool: MCPToolCaller = adapter.callTool.bind(adapter);
+Add import at top: import { createClaudeFlowTransport } from './security/mcp-transport.js';
+Add after orchestrator.shutdown() near line 349: await adapter.disconnect();
+
+Reference files:
+- /workspaces/turbo-flow-claude/src/main.ts (full file)
+- /workspaces/turbo-flow-claude/src/security/mcp-transport.ts (newly created)
+
+TASK 4 - Update tests/integration/first-flight-live.spec.ts:
+Add new describe block "First Flight LIVE Run (Phase 8)" that:
+- Imports firstFlightLive from ../../src/main.js
+- Calls firstFlightLive()
+- Asserts log.totalDispatches >= 2
+- Asserts log.totalBlocked >= 1
+- Asserts log.elapsedMs > 0
+- Timeout 30000ms (MCP server startup)
+- Prints summary table like existing test
+Keep existing firstFlight() test unchanged.
+
+Reference files:
+- /workspaces/turbo-flow-claude/tests/integration/first-flight-live.spec.ts (existing test)
+- /workspaces/turbo-flow-claude/src/main.ts
+
+VERIFICATION:
+Run: npx vitest run tests/ --reporter verbose
+All 197+ existing tests must pass. New Phase 8 test must pass.
+If tests fail, fix and re-run.
+
+TOOL NAME MAPPING (for the adapter):
+aidefence_scan    -> mcp__claude-flow__aidefence_scan     (L1, fail-OPEN)
+aidefence_analyze -> mcp__claude-flow__aidefence_analyze  (L2, fail-OPEN)
+aidefence_is_safe -> mcp__claude-flow__aidefence_is_safe  (L3, fail-CLOSED)
+aidefence_has_pii -> mcp__claude-flow__aidefence_has_pii  (L4, fail-OPEN)
+aidefence_learn   -> mcp__claude-flow__aidefence_learn    (L5, fail-OPEN)
+aidefence_stats   -> mcp__claude-flow__aidefence_stats    (L6, fail-OPEN)
+
+SAFETY INVARIANT:
+L3 fail-CLOSED is non-negotiable. If MCP transport or tool call fails, request MUST be BLOCKED. Adapter must NOT add try/catch around callTool. Coordinator already enforces this.
+
+SCOPE:
+Do NOT modify: coordinator.ts, vector-scanner.ts, orchestrator.ts
+Only touch: mcp-transport.ts (new), main.ts (edit), first-flight-live.spec.ts (edit), package.json (npm install)
