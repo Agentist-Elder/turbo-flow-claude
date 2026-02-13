@@ -681,6 +681,29 @@ lean-agentic benchmark hash-consing --terms 10000
 ```
 
 ---
+---
+
+## 14. GOAP Operational Targets (Active Planning)
+
+This section defines the live targets for the `@agent-goal-planner`.
+
+### 14.1 Target State: Gemini-Ollama Failover Bridge
+- [ ] **Architect Routing:** Architect (Gemini 3) can successfully offload tasks to local Ollama.
+- [ ] **Port Connectivity:** Secure connection established to `localhost:11434` (Ollama).
+- [ ] **Failover Proof:** Verified shift from Gemini to Llama3 (Ollama) during simulated API timeout.
+- [ ] **Traceability:** All bridge decisions are logged in `reflexion_memory`.
+
+### 14.2 Planner Action Library (Logic Map)
+The planner should prioritize the following action-chains:
+
+| Action | Preconditions | Expected Outcome |
+| :--- | :--- | :--- |
+| **Initialize Proxy** | NVM Node v24 active; `.env` contains `OLLAMA_BASE_URL` | `claudish` successfully proxies to port 11434 |
+| **Health Check** | Playwright active; Ollama service running | Bridge returns `status: green` |
+| **Verify Failover** | Gemini API keys rotated or disabled | Worker agents successfully spawn via Ollama |
+
+### 14.3 Success Verification
+The goal is considered achieved when the `cf-swarm` can complete a "Coder" task entirely using the local Worker without the Architect losing context.
 
 *Generated via PAL Bridge (gemini-3-pro-preview) | Validated against architecture_spec.md & CAPABILITIES.md*
 *RuvBot Swarm PRD v1.0.0 | 2026-02-09*
