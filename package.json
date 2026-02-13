@@ -1,5 +1,8 @@
 {
   "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.26.0",

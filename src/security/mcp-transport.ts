@@ -46,8 +46,7 @@ export class MCPTransportAdapter {
   }
 
   /**
-   * Calls an MCP tool by short name (e.g. "aidefence_scan").
-   * Prepends the "mcp__claude-flow__" prefix for the full tool name.
+   * Calls an MCP tool by name (e.g. "aidefence_scan").
    *
    * NO try/catch — errors propagate for L3 fail-CLOSED safety.
    */
@@ -59,11 +58,10 @@ export class MCPTransportAdapter {
       throw new Error('MCPTransportAdapter: client not connected');
     }
 
-    const fullName = `mcp__claude-flow__${toolName}`;
-    const response = await this.client.callTool({ name: fullName, arguments: args });
+    const response = await this.client.callTool({ name: toolName, arguments: args });
 
     if (response.isError) {
-      throw new Error(`MCP tool error from '${fullName}': ${JSON.stringify(response.content)}`);
+      throw new Error(`MCP tool error from '${toolName}': ${JSON.stringify(response.content)}`);
     }
 
     const content = response.content as Array<{ type: string; text?: string }>;
@@ -71,13 +69,16 @@ export class MCPTransportAdapter {
       return JSON.parse(content[0].text);
     }
 
-    throw new Error(`Unexpected response format from '${fullName}': ${JSON.stringify(response)}`);
+    throw new Error(`Unexpected response format from '${toolName}': ${JSON.stringify(response)}`);
   };
 
   async disconnect(): Promise<void> {
-    await this.client?.close();
-    this.client = null;
-    this.transport = null;
+    try {
+      await this.client?.close();
+    } finally {
+      this.client = null;
+      this.transport = null;
+    }
   }
 }
 

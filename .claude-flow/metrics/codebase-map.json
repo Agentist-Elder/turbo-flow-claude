@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-02-11T23:19:58.776Z",
+  "timestamp": "2026-02-13T00:15:55.279Z",
   "projectRoot": "/workspaces/turbo-flow-claude",
   "structure": {
     "hasPackageJson": true,
-    "hasTsConfig": false,
+    "hasTsConfig": true,
     "hasClaudeConfig": true,
     "hasClaudeFlow": true
   },
-  "scannedAt": 1770851998776
+  "scannedAt": 1770941755279
 }

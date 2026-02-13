@@ -14,7 +14,7 @@
 
 import { randomUUID } from 'crypto';
 import { performance } from 'perf_hooks';
-import { AIDefenceCoordinator, MockMCPClient, ThreatLevel } from './security/coordinator.js';
+import { AIDefenceCoordinator, ThreatLevel } from './security/coordinator.js';
 import { NeuralLiveMCPClient, type MCPToolCaller } from './security/live-mcp-client.js';
 import { createClaudeFlowTransport } from './security/mcp-transport.js';
 import { VectorScanner } from './security/vector-scanner.js';
@@ -95,8 +95,15 @@ export async function firstFlight(): Promise<FlightLog> {
     elapsedMs: 0,
   };
 
-  // 1. Initialize the Hub
-  const coordinator = new AIDefenceCoordinator({}, new MockMCPClient());
+  // 1. Initialize the Hub — Phase 9: Unified Orchestration (live transport)
+  const adapter = await createClaudeFlowTransport();
+  const scanner = new VectorScanner({
+    dbPath: '.claude-flow/data/attack-patterns.db',
+    dimensions: 384,
+  });
+  await scanner.initialize();
+  const liveClient = new NeuralLiveMCPClient(adapter.callTool.bind(adapter), scanner);
+  const coordinator = new AIDefenceCoordinator({}, liveClient);
   const bridge = new RecordingMCPBridge();
   const orchestrator = new SwarmOrchestrator(coordinator, {}, bridge);
 
@@ -237,6 +244,7 @@ export async function firstFlight(): Promise<FlightLog> {
 
   // 8. Shutdown
   await orchestrator.shutdown();
+  await adapter.disconnect();
   console.log(`[FirstFlight] Swarm shutdown complete.`);
 
   return log;
@@ -349,3 +357,6 @@ export async function firstFlightLive(): Promise<FlightLog> {
   await adapter.disconnect();
   return log;
 }
+
+// ── Phase 9: Ignition ────────────────────────────────────────────────
+firstFlight().catch(console.error);

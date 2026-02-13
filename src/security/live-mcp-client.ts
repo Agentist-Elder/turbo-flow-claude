@@ -105,20 +105,34 @@ export class LiveMCPClient implements IMCPClient {
     scanScore: number,
     analysisScore: number,
   ): Promise<SafetyVerdict> {
-    const raw = (await this.callTool('aidefence_is_safe', { input })) as MCPSafetyResponse;
-    const finalScore = raw.score ?? Math.max(scanScore, analysisScore);
+    const rawResponse = await this.callTool('aidefence_is_safe', { input });
+
+    // Unwrap MCP content envelope: { content: [{ type: "text", text: "..." }] }
+    let parsed: MCPSafetyResponse;
+    const envelope = rawResponse as { content?: Array<{ type: string; text?: string }> };
+    if (envelope.content && Array.isArray(envelope.content) && envelope.content[0]?.type === 'text' && typeof envelope.content[0].text === 'string') {
+      parsed = JSON.parse(envelope.content[0].text) as MCPSafetyResponse;
+    } else {
+      parsed = rawResponse as MCPSafetyResponse;
+    }
+
+    if (typeof parsed !== 'object' || parsed === null || typeof parsed.safe !== 'boolean') {
+      throw new Error('Invalid response shape from aidefence_is_safe');
+    }
+
+    const finalScore = parsed.score ?? Math.max(scanScore, analysisScore);
 
     let threatLevel = ThreatLevel.SAFE;
-    if (!raw.safe) {
+    if (!parsed.safe) {
       threatLevel = ThreatLevel.BLOCKED;
     } else if (finalScore >= 0.7) {
       threatLevel = ThreatLevel.FLAGGED;
     }
 
     return {
-      safe: raw.safe,
+      safe: parsed.safe,
       threat_level: threatLevel,
-      reason: raw.reason ?? (raw.safe ? 'Input assessed as safe' : 'Unsafe content detected'),
+      reason: parsed.reason ?? (parsed.safe ? 'Input assessed as safe' : 'Unsafe content detected'),
       final_score: finalScore,
     };
   }
