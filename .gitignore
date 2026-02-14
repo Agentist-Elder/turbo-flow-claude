@@ -16,3 +16,9 @@ target/
 agentdb-rust-prime/target/
 node_modules/
 .swarm/memory.db
+
+# Claude Flow runtime/daemon artifacts
+.claude-flow/daemon.pid
+.claude-flow/daemon-state.json
+.claude-flow/.trend-cache.json
+.claude-flow/metrics/
