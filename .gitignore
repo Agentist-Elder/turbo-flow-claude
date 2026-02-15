@@ -22,3 +22,7 @@ node_modules/
 .claude-flow/daemon-state.json
 .claude-flow/.trend-cache.json
 .claude-flow/metrics/
+
+# RuVector intelligence data
+.ruvector/
+.claude/statusline.sh
