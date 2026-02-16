@@ -15,6 +15,16 @@
         "CLAUDE_FLOW_MEMORY_BACKEND": "hybrid"
       },
       "autoStart": false
+    },
+    "rvf": {
+      "command": "npx",
+      "args": [
+        "@ruvector/rvf-mcp-server",
+        "--transport",
+        "stdio"
+      ],
+      "env": {},
+      "autoStart": false
     }
   }
 }

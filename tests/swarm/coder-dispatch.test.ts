@@ -141,7 +141,8 @@ describe('Coder: Audit trail', () => {
 
   it('should call bridge.storeMemory after successful dispatch', async () => {
     await orchestrator.dispatch(message);
-    expect(mockBridge.storeMemory).toHaveBeenCalledTimes(1);
+    // 2 calls: audit (swarm_audit) + ledger (decision_ledger)
+    expect(mockBridge.storeMemory).toHaveBeenCalledTimes(2);
   });
 
   it('audit key should contain "handoff:" prefix + messageId', async () => {

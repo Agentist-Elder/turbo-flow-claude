@@ -279,11 +279,17 @@ describe('SwarmOrchestrator', () => {
       // Allow fire-and-forget to flush
       await new Promise(r => setTimeout(r, 10));
 
-      expect(storeMemory).toHaveBeenCalledTimes(1);
+      // 2 calls: audit (swarm_audit) + ledger (decision_ledger)
+      expect(storeMemory).toHaveBeenCalledTimes(2);
       expect(storeMemory).toHaveBeenCalledWith(
         `handoff:${msg.id}`,
         expect.any(String),
         'swarm_audit',
+      );
+      expect(storeMemory).toHaveBeenCalledWith(
+        expect.stringMatching(/^ledger:[a-f0-9]{64}$/),
+        expect.any(String),
+        'decision_ledger',
       );
     });
 
@@ -318,7 +324,7 @@ describe('SwarmOrchestrator', () => {
       );
     });
 
-    it('enableAudit=false skips audit storage', async () => {
+    it('enableAudit=false skips audit storage (ledger still writes)', async () => {
       const storeMemory = vi.fn(async () => {});
       const { orch } = makeOrchestrator({ storeMemory }, { enableAudit: false });
       const msg = makeMessage();
@@ -326,7 +332,13 @@ describe('SwarmOrchestrator', () => {
       await orch.dispatch(msg);
       await new Promise(r => setTimeout(r, 10));
 
-      expect(storeMemory).not.toHaveBeenCalled();
+      // Only the ledger write, no audit write
+      expect(storeMemory).toHaveBeenCalledTimes(1);
+      expect(storeMemory).toHaveBeenCalledWith(
+        expect.stringMatching(/^ledger:/),
+        expect.any(String),
+        'decision_ledger',
+      );
     });
 
     it('audit failure does NOT crash dispatch', async () => {

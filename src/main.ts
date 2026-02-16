@@ -359,4 +359,12 @@ export async function firstFlightLive(): Promise<FlightLog> {
 }
 
 // ── Phase 9: Ignition ────────────────────────────────────────────────
-firstFlight().catch(console.error);
+// Guard: only auto-run when executed directly, not on import.
+const isDirectExecution =
+  typeof process !== 'undefined' &&
+  process.argv[1] &&
+  import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'));
+
+if (isDirectExecution) {
+  firstFlight().catch(console.error);
+}

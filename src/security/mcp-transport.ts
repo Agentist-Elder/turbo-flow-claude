@@ -153,14 +153,22 @@ export class MCPTransportAdapter {
     this.retryConfig = retryConfig ?? DEFAULT_RETRY;
   }
 
-  async connect(): Promise<void> {
+  async connect(timeoutMs = 10_000): Promise<void> {
     this.transport = new StdioClientTransport({
       command: this.config.command,
       args: this.config.args,
       env: { ...process.env, ...this.config.env } as Record<string, string>,
     });
     this.client = new Client({ name: 'ruvbot-swarm', version: '1.0.0' });
-    await this.client.connect(this.transport);
+
+    const connectPromise = this.client.connect(this.transport);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(
+        `MCP connection timed out after ${timeoutMs}ms. Is the claude-flow server running?`,
+      )), timeoutMs),
+    );
+
+    await Promise.race([connectPromise, timeoutPromise]);
   }
 
   /**

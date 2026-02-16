@@ -8,6 +8,8 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@ruvector/rvf": "^0.1.7",
+    "@ruvector/rvf-mcp-server": "^0.1.3",
     "dotenv": "^17.2.4",
     "ruvector": "^0.1.96"
   },

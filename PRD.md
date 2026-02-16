@@ -2,7 +2,7 @@
 
 | Metadata | Details |
 | :--- | :--- |
-| **Version** | 1.0.0 |
+| **Version** | 1.1.0 |
 | **Date** | 2026-02-09 |
 | **Status** | Approved for Implementation |
 | **Authors** | RuvBot Product Team (via PAL Bridge) |
@@ -17,7 +17,7 @@
 
 RuvBot Swarm is a minimal, high-performance multi-agent system built on the principle of **intelligence density over agent count**. By enforcing a **Lean Build Architecture** (1 Architect + 1 Worker), the system eliminates the latency bloat, context drift, and coordination overhead endemic to large agent swarms.
 
-The swarm is powered by **Gemini 3 Flash Preview** models, orchestrated via **Claude Flow V3**, and hardened by a **6-Layer AIDefence Stack** that gates every request through scanning, analysis, safety verification, PII detection, adaptive learning, and continuous auditing. The defense layers are backed by **AgentDB** (HNSW vector search, <2ms), **lean-agentic** (formal verification, <5ms proofs), and the **Midstream** temporal processing platform.
+The swarm is powered by **Gemini 3 Pro Preview** (Architect) and **Gemini 2.5 Flash** (Worker) models, orchestrated via **Claude Flow V3**, and hardened by a **6-Layer AIDefence Stack** that gates every request through scanning, analysis, safety verification, PII detection, adaptive learning, and continuous auditing. The defense layers are backed by **AgentDB** (HNSW vector search, <2ms), **lean-agentic** (formal verification, <5ms proofs), and the **Midstream** temporal processing platform.
 
 **Key Targets:**
 - Sub-10ms fast-path detection (95% of requests)
@@ -67,7 +67,7 @@ The swarm operates on a strict **2-agent hierarchical topology** to minimize com
 | Attribute | Specification |
 | :--- | :--- |
 | **Role** | Strategic Commander |
-| **Model** | `gemini-3-flash-preview` |
+| **Model** | `gemini-3-pro-preview` |
 | **Operation** | Interactive (Stateful) |
 | **Env Variable** | `COORDINATOR_MODEL` |
 
@@ -84,8 +84,8 @@ The swarm operates on a strict **2-agent hierarchical topology** to minimize com
 | Attribute | Specification |
 | :--- | :--- |
 | **Role** | Tactical Executor |
-| **Model** | `gemini-3-flash-preview` (primary), `gemini-2.5-flash` (fallback) |
-| **Operation** | Headless (Ephemeral) via `claude -p` |
+| **Model** | `gemini-2.5-flash` |
+| **Operation** | Headless (Ephemeral) via PAL Bridge |
 | **Env Variable** | `WORKER_MODEL` |
 
 **Responsibilities:**
@@ -96,19 +96,19 @@ The swarm operates on a strict **2-agent hierarchical topology** to minimize com
 
 **Worker Spawn Types:**
 
-| Type | Spawn Command | Purpose |
+| Type | Routing | Purpose |
 | :--- | :--- | :--- |
-| `coder` | `claude -p "Implement [feature]"` | Code generation |
-| `tester` | `claude -p "Write tests for [module]"` | Test creation |
-| `reviewer` | `claude -p "Review [files]"` | Code review |
-| `docs` | `claude -p "Document [component]"` | Documentation |
-| `analyst` | `claude -p "Analyze [system]"` | Technical analysis |
+| `coder` | PAL Bridge → Gemini 2.5 Flash | Code generation |
+| `tester` | PAL Bridge → Gemini 2.5 Flash | Test creation |
+| `reviewer` | PAL Bridge → Gemini 2.5 Flash | Code review |
+| `docs` | PAL Bridge → Gemini 2.5 Flash | Documentation |
+| `analyst` | PAL Bridge → Gemini 2.5 Flash | Technical analysis |
 
 ### 4.3 Coordination Protocol
 
 ```
 ┌─────────────────────────────────────────────────┐
-│   ARCHITECT (Interactive - Gemini 3 Flash)       │
+│   ARCHITECT (Interactive - Gemini 3 Pro)          │
 │   ├─ Receive user request                       │
 │   ├─ Gate through 6-Layer AIDefence             │
 │   ├─ Decompose into atomic task                 │
@@ -116,12 +116,12 @@ The swarm operates on a strict **2-agent hierarchical topology** to minimize com
 │   ├─ Monitor via shared memory                  │
 │   └─ Aggregate and return result                │
 └───────────────────┬─────────────────────────────┘
-                    │ spawns (claude -p)
+                    │ spawns (PAL Bridge)
                     ▼
             ┌──────────────┐
             │   WORKER     │
             │ (Headless)   │
-            │ Gemini 3     │
+            │ Gemini 2.5   │
             │              │
             │ Execute task │
             │ Write to     │
@@ -135,8 +135,7 @@ The swarm operates on a strict **2-agent hierarchical topology** to minimize com
 
 | Environment | Platform | Model Routing |
 | :--- | :--- | :--- |
-| Primary | GitHub Codespaces (Cloud) | Gemini 3 Flash Preview |
-| Secondary | Local Mac | Ollama via PAL Manager |
+| Primary | GitHub Codespaces (Cloud) | Gemini 3 Pro Preview (Architect) / Gemini 2.5 Flash (Worker) |
 
 ### 4.4 Initialization
 
@@ -364,8 +363,8 @@ Security is not an add-on; it is the **gateway**. Every request passes through t
 │  │   │    ARCHITECT        │       │    WORKER            │       │  │
 │  │   │    (Interactive)    │──────▶│    (Headless)        │       │  │
 │  │   │                    │ QUIC  │                      │       │  │
-│  │   │  gemini-3-flash    │ TLS   │  gemini-3-flash     │       │  │
-│  │   │                    │◀──────│  (or 2.5-flash)     │       │  │
+│  │   │  gemini-3-pro      │ TLS   │  gemini-2.5-flash   │       │  │
+│  │   │                    │◀──────│                      │       │  │
 │  │   │  - Decompose       │ 1.3   │                      │       │  │
 │  │   │  - Route           │       │  - Code              │       │  │
 │  │   │  - Aggregate       │       │  - Test              │       │  │
@@ -500,8 +499,8 @@ Deep Path (5% of requests):
 
 | Component | Model | Purpose |
 | :--- | :--- | :--- |
-| Architect Agent | `gemini-3-flash-preview` | Strategic reasoning |
-| Worker Agent | `gemini-3-flash-preview` / `gemini-2.5-flash` | Task execution |
+| Architect Agent | `gemini-3-pro-preview` | Strategic reasoning |
+| Worker Agent | `gemini-2.5-flash` | Task execution |
 | Embedding | text-embedding (1536-dim) | Vector similarity |
 
 ### 8.2 Orchestration
@@ -617,7 +616,7 @@ Deep Path (5% of requests):
 | **Context Drift** | Medium | Low | L6 vector distribution monitoring; auto-reindexing above threshold |
 | **Cost Overrun** | Low | Low | AgentDB caching (30%+); Int8/4-bit quantization for edge |
 | **Single Worker Bottleneck** | Medium | Medium | Architect queues tasks; can spawn multiple ephemeral Workers under burst |
-| **Model Unavailability** | High | Low | Fallback from gemini-3-flash to gemini-2.5-flash; local Ollama via PAL |
+| **Model Unavailability** | High | Low | Fallback from gemini-3-pro-preview to gemini-2.5-flash via PAL Bridge |
 | **PII False Negatives** | High | Low | Layered detection (L4 + lean-agentic formal PII axioms) |
 
 ---
@@ -681,29 +680,6 @@ lean-agentic benchmark hash-consing --terms 10000
 ```
 
 ---
----
-
-## 14. GOAP Operational Targets (Active Planning)
-
-This section defines the live targets for the `@agent-goal-planner`.
-
-### 14.1 Target State: Gemini-Ollama Failover Bridge
-- [ ] **Architect Routing:** Architect (Gemini 3) can successfully offload tasks to local Ollama.
-- [ ] **Port Connectivity:** Secure connection established to `localhost:11434` (Ollama).
-- [ ] **Failover Proof:** Verified shift from Gemini to Llama3 (Ollama) during simulated API timeout.
-- [ ] **Traceability:** All bridge decisions are logged in `reflexion_memory`.
-
-### 14.2 Planner Action Library (Logic Map)
-The planner should prioritize the following action-chains:
-
-| Action | Preconditions | Expected Outcome |
-| :--- | :--- | :--- |
-| **Initialize Proxy** | NVM Node v24 active; `.env` contains `OLLAMA_BASE_URL` | `claudish` successfully proxies to port 11434 |
-| **Health Check** | Playwright active; Ollama service running | Bridge returns `status: green` |
-| **Verify Failover** | Gemini API keys rotated or disabled | Worker agents successfully spawn via Ollama |
-
-### 14.3 Success Verification
-The goal is considered achieved when the `cf-swarm` can complete a "Coder" task entirely using the local Worker without the Architect losing context.
 
 *Generated via PAL Bridge (gemini-3-pro-preview) | Validated against architecture_spec.md & CAPABILITIES.md*
-*RuvBot Swarm PRD v1.0.0 | 2026-02-09*
+*RuvBot Swarm PRD v1.1.0 | Phase 12: Cloud-Only Execution Path*
