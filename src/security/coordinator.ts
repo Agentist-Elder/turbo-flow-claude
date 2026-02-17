@@ -86,9 +86,9 @@ export interface CoordinatorConfig {
 export const LATENCY_BUDGETS: Record<string, number> = {
   L1_SCAN: 2.0,
   L2_ANALYZE: 8.0,
-  L3_SAFE: 1.0,
+  L3_SAFE: 5.0,
   L4_PII: 5.0,
-  TOTAL_FAST_PATH: 16.0,
+  TOTAL_FAST_PATH: 20.0,
 };
 
 export const DEFAULT_CONFIG: CoordinatorConfig = {

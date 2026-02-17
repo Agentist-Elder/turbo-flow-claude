@@ -1,9 +1,8 @@
 {
   "mcpServers": {
     "claude-flow": {
-      "command": "npx",
+      "command": "/usr/local/share/nvm/versions/node/v24.12.0/bin/claude-flow",
       "args": [
-        "@claude-flow/cli@latest",
         "mcp",
         "start"
       ],
@@ -17,9 +16,9 @@
       "autoStart": false
     },
     "rvf": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "@ruvector/rvf-mcp-server",
+        "/workspaces/turbo-flow-claude/node_modules/@ruvector/rvf-mcp-server/dist/cli.js",
         "--transport",
         "stdio"
       ],
