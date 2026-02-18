@@ -1,115 +1,197 @@
 # Bunker Strategy v1 — GTIG Feb 2026 Infrastructure Trust Gap
 
-> Generated: 2026-02-17T21:50:53.419Z
+> Generated: 2026-02-18T20:27:24.977Z
 > Model: gemini-3-pro-preview via PAL
-> AIDefence: GATED (security-research override) | RVF Witnessed: pending
-> Goal: RESEARCH: Bridge the Infrastructure Trust Gap. 
-  1. Use the provided GTIG context file to analyze APT31, APT42, Xanthor...
-
-> **SIGNED RESEARCH WARNING**: This content was gated by AIDefence L3
-> but allowed under `--allow-security-research` for defensive threat analysis.
-> The override is recorded in the RVF witness chain for audit purposes.
+> AIDefence: PASSED | RVF Witnessed: 3 entries (SHAKE-256 chain)
+> Goal: EVALUATE AND DESIGN: Infrastructure Trust Gap Defensive Strategy.                                                       ...
 
 ---
-# Bunker Strategy v1: Bridging the Infrastructure Trust Gap
+Here is an objective analysis and design proposal based on the `gtig_context.md` intelligence summary.
 
-**Date:** February 2026
-**Source Material:** GTIG Feb 2026 Intel Summary
-**Focus:** Counter-AI Infrastructure Defense
+### **Infrastructure Trust Gap Defensive Strategy**
 
-## 1. Executive Summary
-
-The "Infrastructure Trust Gap" refers to the vulnerability space where AI-generated threats exploit the lack of cryptographic verification in standard compute and identity workflows. This strategy outlines architectural defenses against two specific high-value threat vectors identified in the GTIG context: **Just-in-Time (JIT) Malware generation** and **AI-driven Human Infiltration**.
-
-## 2. Threat Landscape Analysis (GTIG Context)
-
-Based on the provided intelligence, we categorize the actors into *Infrastructure Threats* (Technical) and *Trust Threats* (Social/Identity).
-
-### 2.1 Infrastructure Threats
-*   **HONESTCUE (North Korea):** The primary technical threat. By generating C# payload logic at runtime via the Gemini API, HONESTCUE bypasses the "Write-Build-Deploy" lifecycle. Traditional EDRs fail because the payload has no file signature and no static existence on disk.
-*   **Xanthorox (Underground):** Acts as the enabler, providing the "Jailbreak-as-a-Service" layer that allows malware authors to bypass commercial AI safety filters to generate malicious code.
-*   **APT31 (China):** Represents the automation of the "Find" phase of the kill chain, using AI personas to scale vulnerability discovery.
-
-### 2.2 Trust & Identity Threats
-*   **UNC2970 (North Korea):** The primary identity threat. Uses AI to generate flawless "personas" for recruitment. The AI handles the resume, the cover letter, and potentially real-time interview responses, allowing actors to infiltrate organizations as "employees."
-*   **APT42 (Iran):** Uses similar generative capabilities for "Rapport-Building Phishing," creating deep social engineering hooks.
+**Primary Intelligence Source:** `docs/research/gtig_context.md` (GTIG Feb 2026 Intel Summary)
+**External Standards Referenced:** W3C Decentralized Identifiers (DID) v1.0, W3C Verifiable Credentials Data Model v1.1, IETF RATS (Remote Attestation Procedures).
 
 ---
 
-## 3. Strategic Response 1: Deterministic Provenance (RVF)
-**Target:** HONESTCUE (Just-in-Time Code Generation)
+### **SECTION 1 — Threat Classification**
 
-### 3.1 The Vulnerability
-HONESTCUE exploits the assumption that code executing in memory is valid. It injects logic directly from an API response (Gemini) into the runtime. This code has no "history"—it was never committed, reviewed, or built by a trusted CI/CD pipeline.
+Based on the actor profiles in `gtig_context.md`, the following classification maps the threat landscape. The "Detection Difficulty" is weighted against current standard EDR/XDR capabilities.
 
-### 3.2 The Solution: RVF Witness Chains
-We propose a **Deterministic Provenance** model using a Remote Verification Function (RVF).
+| Actor | Vector | Automation Level | Detection Difficulty | Primary Challenge |
+| :--- | :--- | :--- | :--- | :--- |
+| **APT31** | Vulnerability Research / Zero-Day | **High** (Agentic discovery) | **High** | Distinguishing automated "research" traffic from legitimate security scanning or user browsing. |
+| **APT42** | Social Engineering (Phishing) | **Medium-High** (Multi-turn LLM) | **High** | Context-aware lures bypass standard "bad grammar/generic urgency" heuristics. |
+| **Xanthorox** | Supply Chain / Tooling | **High** (API Proxy) | **Medium** | Detection depends on the *output* payload; the tool itself is just a wrapper. |
+| **HONESTCUE** | Malware (JIT Execution) | **High** (Runtime Gen) | **Very High** | Payload does not exist on disk; signature-based AV is effectively blind. |
+| **UNC2970** | Identity Infiltration | **Medium** (Persona Gen) | **High** | Valid credentials and technical competence mask the malicious intent; human-layer vulnerability. |
 
-**Core Principle:** *No Execution Without Attestation.*
+**Analysis:** The highest technical risk is **HONESTCUE** due to the invalidation of static analysis. The highest organizational risk is **UNC2970**, as it bypasses technical controls entirely by compromising the "trusted insider" assumption.
 
-**Architecture:**
-1.  **The Witness Chain:** Every legitimate piece of code in the environment must possess a cryptographic "chain of custody":
-    *   `Witness A`: Developer GPG signature on Commit.
-    *   `Witness B`: CI/CD Pipeline signature on Build Artifact.
-    *   `Witness C`: Deployer signature on Release.
-2.  **Runtime Enforcement:** The RVF acts as a kernel-level or runtime-level monitor.
-3.  **The Block:**
-    *   HONESTCUE fetches C# code from Gemini.
-    *   HONESTCUE attempts to load this byte stream into memory for execution.
-    *   **RVF Check:** The monitor intercepts the call. It queries the ledger for the hash of the byte stream.
-    *   **Result:** The hash is unknown (it was generated seconds ago by an AI). It lacks `Witness B` (Build) and `Witness A` (Commit).
-    *   **Action:** Execution is terminated. Alert raised: "Unprovenanced Code Artifact Detected."
+---
 
-### 3.3 Implementation Logic (Pseudocode)
-```python
-def verify_execution_request(code_blob):
-    blob_hash = sha256(code_blob)
-    
-    # Query the immutable ledger for this artifact's history
-    provenance_record = ledger.lookup(blob_hash)
-    
-    if not provenance_record:
-        return BLOCK_EXECUTION("Violation: Code artifact has no provenance.")
+### **SECTION 2 — HONESTCUE (JIT Code Generation)**
+
+**Context:** HONESTCUE generates C# logic at runtime via API (Line 15), evading static signatures.
+
+#### **Evaluation of Deterministic Provenance (RVF/Hash-Chaining)**
+
+**Proposition:** Require all executable code to have a cryptographic lineage (Remote Verification Function / Hash-Chain) back to a trusted build source.
+
+*   **Pros:**
+    *   **Eliminates Unsigned Execution:** If the runtime enforces the policy, code generated ad-hoc by an LLM (without a signing key) cannot execute.
+    *   **Auditability:** Every running process has a verifiable build manifest.
+*   **Cons:**
+    *   **The "Loader" Problem:** If the malware "shell" is signed, but it allocates executable memory (JIT) for the LLM payload, the provenance check must extend to dynamic memory allocation, which is computationally expensive and complex to instrument.
+    *   **Fragility:** Breaks legitimate JIT use cases (browsers, managed language runtimes like CLR/JVM) unless complex allow-lists are maintained.
+
+#### **Alternative: Hardware-Backed Runtime Attestation (Confidential Computing)**
+Using TEEs (Trusted Execution Environments) like Intel SGX or AMD SEV to ensure the memory space hasn't been tampered with.
+
+#### **Recommendation**
+**Deterministic Provenance is necessary but insufficient.** It must be paired with **Runtime Memory Constraints**.
+*   **Strategy:** Enforce `W^X` (Write XOR Execute) strictly. Memory can be writable or executable, never both.
+*   **Defensive Layer:** A signed "Enclave" that handles the API communication. If the Enclave attempts to map returned bytes as executable memory, the kernel (configured via provenance policy) denies the syscall.
+
+#### **Rust Pseudocode: Provenance-Aware Loader**
+
+```rust
+// Pseudocode: Enforcing provenance before execution
+use std::error::Error;
+
+struct CodeArtifact {
+    bytecode: Vec<u8>,
+    signature: Vec<u8>,
+    provenance_hash: String, // The RVF hash
+}
+
+trait ProvenanceVerifier {
+    fn verify(&self, artifact: &CodeArtifact) -> Result<bool, Box<dyn Error>>;
+}
+
+struct TrustPolicy;
+
+impl ProvenanceVerifier for TrustPolicy {
+    fn verify(&self, artifact: &CodeArtifact) -> Result<bool, Box<dyn Error>> {
+        // 1. Verify cryptographic signature against trusted root CA
+        if !crypto::verify_signature(&artifact.bytecode, &artifact.signature) {
+            return Ok(false);
+        }
+
+        // 2. Check provenance hash against transparency log (e.g., Sigstore)
+        // This defeats JIT code because the LLM output won't be in the log.
+        let is_known = transparency_log::exists(&artifact.provenance_hash);
         
-    if not provenance_record.has_witness("CI_BUILD_SIGNATURE"):
-        return BLOCK_EXECUTION("Violation: Code bypassed CI/CD pipeline.")
-        
-    return ALLOW_EXECUTION
+        Ok(is_known)
+    }
+}
+
+fn execute_safe(artifact: CodeArtifact, policy: TrustPolicy) {
+    match policy.verify(&artifact) {
+        Ok(true) => {
+            // SAFE: Map memory as executable
+            // In a real scenario, this wraps mmap/VirtualAlloc
+            unsafe { sys::exec_memory(&artifact.bytecode) };
+        },
+        _ => {
+            // BLOCK: Log attempt by HONESTCUE-style actor
+            alert!("Blocked execution of unverified JIT artifact");
+        }
+    }
+}
 ```
 
 ---
 
-## 4. Strategic Response 2: DID-Based Passport
-**Target:** UNC2970 (Recruitment-Based Profiling/Infiltration)
+### **SECTION 3 — UNC2970 (Recruitment-Based Identity Infiltration)**
 
-### 4.1 The Vulnerability
-UNC2970 exploits the fact that digital resumes and email correspondence are merely text. Generative AI excels at producing convincing text. Current hiring processes rely on "plausibility" rather than "proof."
+**Context:** UNC2970 uses AI personas to infiltrate organizations via hiring pipelines (Line 18).
 
-### 4.2 The Solution: Cryptographic Identity Anchoring
-We propose a **DID (Decentralized Identifier) Passport** system for high-security recruitment.
-
-**Core Principle:** *Verifiable Credentials (VCs) over Generative Text.*
+#### **Design: DID-Based Passport Verification**
 
 **Architecture:**
-1.  **The Anchor:** The candidate creates a DID (e.g., `did:key:z6Mk...`).
-2.  **The Issuer:** Trusted entities (Universities, Previous Employers) act as Issuers. They sign a Verifiable Credential (VC) attesting to a fact (e.g., "Employed at Google 2020-2024") using their own DID private keys.
-3.  **The Presentation:** Instead of sending a PDF resume (which UNC2970 generates), the candidate presents a **Verifiable Presentation** containing these signed VCs.
-4.  **The Block:**
-    *   UNC2970 creates a fake persona "Jane Doe, Ex-Microsoft Engineer."
-    *   The target organization requests a VC signed by Microsoft's DID.
-    *   **Failure:** The AI cannot forge Microsoft's cryptographic signature. It can generate the *text* of a resume, but not the *proof* of the claim.
-    *   **Action:** Application rejected automatically due to "Invalid Credential Signature."
+We utilize the **W3C Decentralized Identifier (DID)** standard. The candidate (Holder) presents a Verifiable Presentation (VP) containing Verifiable Credentials (VCs) from previous employers or universities (Issuers) to the hiring company (Verifier).
 
-### 4.3 Passport Logic Flow
-1.  **Challenge:** Recruiter system sends a challenge nonce to Candidate.
-2.  **Response:** Candidate wallet signs the nonce and attaches VCs.
-3.  **Verification:**
-    *   Check 1: Does the signature match the Candidate's DID? (Proof of Ownership)
-    *   Check 2: Is the "Employment" VC signed by a known Employer DID? (Proof of Truth)
-    *   Check 3: Is the Employer DID in the "Trusted Issuer Registry"? (Proof of Trust)
+**Threat Model:**
+*   **Solves:** Resume fabrication. An LLM cannot generate a cryptographically signed VC from a university's private key.
+*   **Does Not Solve:** **The "Sybil" Issuer.** UNC2970 could create a fake shell company, register a DID, and issue valid VCs to their own personas.
+*   **Does Not Solve:** **Biometric Mismatch.** The person interviewing might not be the owner of the DID (deepfake video feed).
 
-## 5. Conclusion
+#### **Failure Modes**
+1.  **Issuer Collusion:** The threat actor controls the Issuer.
+2.  **Private Key Theft:** The actor steals a legitimate user's keys.
 
-By shifting from **heuristic detection** (looking for "bad" patterns) to **cryptographic enforcement** (requiring "good" proofs), we bridge the trust gap.
-*   **RVF** ensures code is human-authorized, neutralizing **HONESTCUE**.
-*   **DID Passports** ensure identities are real-world anchored, neutralizing **UNC2970**.
+#### **Rust Pseudocode: DID Verification Logic**
+
+```rust
+// Pseudocode: Verifying a candidate's employment history via DID
+use did_sdk::{DidDocument, VerifiableCredential, VerifiablePresentation};
+
+struct CandidatePassport {
+    did: String,
+    credentials: Vec<VerifiableCredential>,
+}
+
+struct EmployerVerifier {
+    trusted_issuer_registry: Vec<String>, // List of trusted DIDs (e.g., known universities)
+}
+
+impl EmployerVerifier {
+    fn verify_candidate(&self, presentation: VerifiablePresentation) -> bool {
+        // 1. Verify the Presentation Signature (Proof of Ownership)
+        // Ensures the presenter owns the DID.
+        if !presentation.verify_proof() {
+            return false; 
+        }
+
+        for vc in presentation.credentials {
+            // 2. Verify Issuer Trust
+            // Prevents UNC2970 from using shell company DIDs.
+            if !self.trusted_issuer_registry.contains(&vc.issuer.id) {
+                println!("Warning: Credential from untrusted issuer: {}", vc.issuer.id);
+                continue; // or fail hard depending on policy
+            }
+
+            // 3. Verify Credential Integrity
+            // Ensures data hasn't been tampered with since issuance.
+            if !vc.verify_signature() {
+                return false;
+            }
+            
+            // 4. Check Revocation Status (e.g., via StatusList2021)
+            if vc.is_revoked() {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+```
+
+---
+
+### **SECTION 4 — Phased Roadmap**
+
+**Phase 1: Immediate Hardening (Months 1-3)**
+*   **Objective:** Raise the cost of automated attacks.
+*   **Action:** Implement strict **FIDO2/WebAuthn** hardware keys for all access. This mitigates APT42 (Phishing) as credentials cannot be phished.
+*   **Action:** Deploy **Endpoint restrictions** blocking execution of unsigned scripts in temp folders (mitigates basic HONESTCUE loaders).
+
+**Phase 2: Provenance Architecture (Months 4-9)**
+*   **Objective:** Address the "Trust Gap" in software supply chain.
+*   **Action:** Implement **SLSA Level 3** build pipelines. All internal code must be signed.
+*   **Action:** Pilot the **Rust Provenance Verifier** (from Section 2) on critical production servers to block JIT anomalies.
+
+**Phase 3: Identity Web of Trust (Months 10-18)**
+*   **Objective:** Counter UNC2970 and deepfakes.
+*   **Action:** Roll out **DID-based verification** for HR. Require cryptographic proof of previous employment for sensitive roles.
+*   **Action:** Implement **Liveness Detection** challenges during interviews to counter AI video avatars.
+
+---
+
+**Recommendation Summary:**
+Technology alone cannot solve the UNC2970 (Identity) problem; it requires a "Web of Trust" model. However, the HONESTCUE (Malware) problem is solvable via strict, cryptographic enforcement of code provenance at the kernel level.
+
+For implementation details of the Rust verifier or the DID schema definitions, see the phased roadmap above.
