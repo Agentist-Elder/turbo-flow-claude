@@ -13,8 +13,9 @@
  */
 
 import { randomUUID } from 'crypto';
-import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
-import { dirname } from 'path';
+import { readFile, writeFile, mkdir, unlink, copyFile, readdir } from 'fs/promises';
+import { dirname, join } from 'path';
+import { homedir } from 'os';
 import { performance } from 'perf_hooks';
 import { AIDefenceCoordinator, ThreatLevel } from './security/coordinator.js';
 import { NeuralLiveMCPClient, type MCPToolCaller } from './security/live-mcp-client.js';
@@ -586,6 +587,32 @@ async function fetchUrlsToFiles(urls: string[]): Promise<string[]> {
  *   5. Each scrubbed response → RVF witness (PROVENANCE record)
  *   6. Summary
  */
+
+// ── Vector DB backup (rolling, ~/backups/) ──────────────────────────
+const DB_SOURCE = 'ruvector.db';
+const BACKUP_DIR = join(homedir(), 'backups', 'ruvector');
+const MAX_BACKUPS = 5;
+
+async function backupVectorDB(): Promise<void> {
+  try {
+    await mkdir(BACKUP_DIR, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const dest = join(BACKUP_DIR, `ruvector_${ts}.db`);
+    await copyFile(DB_SOURCE, dest);
+
+    // Prune oldest if over MAX_BACKUPS
+    const entries = (await readdir(BACKUP_DIR))
+      .filter(f => f.endsWith('.db'))
+      .sort(); // ISO timestamps sort lexicographically
+    for (const old of entries.slice(0, Math.max(0, entries.length - MAX_BACKUPS))) {
+      await unlink(join(BACKUP_DIR, old));
+    }
+    console.log(`[BACKUP] ruvector.db → ${dest} (kept last ${MAX_BACKUPS})`);
+  } catch (err) {
+    console.warn(`[BACKUP] Warning: DB backup failed — ${(err as Error).message}`);
+  }
+}
+
 export async function runGoal(
   goal: string,
   opts: { allowSecurityResearch?: boolean; fetchUrls?: string[] } = {},
@@ -870,8 +897,9 @@ export async function runGoal(
     if (researchResponse.length > 1000) console.log(`\n... (${researchResponse.length - 1000} more chars — see ${outputFile})`);
   }
 
-  // ── 7. Shutdown all three transports ───────────────────────────────
+  // ── 7. Backup vector DB, then shutdown all three transports ────────
 
+  await backupVectorDB();
   await orchestrator.shutdown();
   await cfAdapter.disconnect();
   await palAdapter.disconnect();
