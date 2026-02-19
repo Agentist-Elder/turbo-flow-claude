@@ -364,10 +364,11 @@ export async function firstFlightLive(): Promise<FlightLog> {
 
 // ── CLI Argument Parser ──────────────────────────────────────────────
 
-function parseGoalArgs(): { goal: string | null; allowSecurityResearch: boolean } {
+function parseGoalArgs(): { goal: string | null; allowSecurityResearch: boolean; fetchUrls: string[] } {
   const args = process.argv.slice(2);
   let goal: string | null = null;
   let allowSecurityResearch = false;
+  let fetchUrls: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--goal' && args[i + 1]) {
       goal = args[i + 1];
@@ -375,8 +376,11 @@ function parseGoalArgs(): { goal: string | null; allowSecurityResearch: boolean 
     if (args[i] === '--allow-security-research') {
       allowSecurityResearch = true;
     }
+    if (args[i] === '--fetch-urls' && args[i + 1]) {
+      fetchUrls = args[i + 1].split(/\s+/).filter(Boolean);
+    }
   }
-  return { goal, allowSecurityResearch };
+  return { goal, allowSecurityResearch, fetchUrls };
 }
 
 // ── Secret Scrubber ─────────────────────────────────────────────────
@@ -510,9 +514,59 @@ async function createPALTransport(): Promise<MCPTransportAdapter> {
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY ?? '',
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ?? '',
     },
+    // Gemini can take 2-4 minutes for large research prompts with multiple context files.
+    // The MCP SDK default of 60s is too short — set 5 minutes.
+    requestTimeoutMs: 300_000,
   });
   await adapter.connect(30_000); // PAL may take longer to start (Python + uvx)
   return adapter;
+}
+
+// ── URL Fetch Phase (Node.js fetch — no browser needed) ─────────────
+
+/**
+ * Strips HTML tags from a string, preserving readable text content.
+ * Removes script/style blocks entirely, collapses whitespace.
+ */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Fetches each URL with Node.js fetch(), strips HTML, saves to a temp file.
+ * Failures are non-fatal — a warning is logged and the URL is skipped.
+ */
+async function fetchUrlsToFiles(urls: string[]): Promise<string[]> {
+  const files: string[] = [];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'RuvBot-Research/1.0 (ADR fetch; +https://github.com/ruvbot)' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const text = stripHtml(html).slice(0, 8_000);
+      const safeName = url.replace(/[^a-z0-9]/gi, '_').slice(0, 60);
+      const tmpFile = `/tmp/ruvbot_fetch_${safeName}.txt`;
+      await writeFile(tmpFile, `# Fetched from: ${url}\n\n${text}`, 'utf-8');
+      files.push(tmpFile);
+      console.log(`[GOAP] Fetched ${text.length} chars from ${url}`);
+    } catch (err) {
+      console.warn(`[GOAP] Fetch failed for ${url}: ${err}`);
+    }
+  }
+  return files;
 }
 
 // ── Goal Runner (Phase 12a — Option B: Self-Contained) ──────────────
@@ -532,7 +586,10 @@ async function createPALTransport(): Promise<MCPTransportAdapter> {
  *   5. Each scrubbed response → RVF witness (PROVENANCE record)
  *   6. Summary
  */
-export async function runGoal(goal: string, opts: { allowSecurityResearch?: boolean } = {}): Promise<FlightLog> {
+export async function runGoal(
+  goal: string,
+  opts: { allowSecurityResearch?: boolean; fetchUrls?: string[] } = {},
+): Promise<FlightLog> {
   const t0 = performance.now();
   const scrub = buildSecretScrubber();
   const log: FlightLog = {
@@ -632,6 +689,16 @@ export async function runGoal(goal: string, opts: { allowSecurityResearch?: bool
     return log;
   }
 
+  // ── 3b. Phase 0: URL Fetch (optional — populates live context for PAL) ──
+
+  const fetchedFiles: string[] = [];
+  if (opts.fetchUrls && opts.fetchUrls.length > 0) {
+    console.log(`\n[GOAP] === PHASE 0: URL FETCH (${opts.fetchUrls.length} URLs) ===`);
+    const files = await fetchUrlsToFiles(opts.fetchUrls);
+    fetchedFiles.push(...files);
+    console.log(`[GOAP] Fetch complete: ${fetchedFiles.length}/${opts.fetchUrls.length} files ready for PAL`);
+  }
+
   // ── 4. PAL Chat: research with file-based context ───────────────────
 
   const contextFile = '/workspaces/turbo-flow-claude/docs/research/gtig_context.md';
@@ -639,6 +706,9 @@ export async function runGoal(goal: string, opts: { allowSecurityResearch?: bool
 
   console.log(`\n[GOAP] === PHASE 2: PAL CHAT (research with context) ===`);
   console.log(`[GOAP] Context file: ${contextFile}`);
+  if (fetchedFiles.length > 0) {
+    console.log(`[GOAP] Live fetched files: ${fetchedFiles.join(', ')}`);
+  }
 
   let researchResponse = '';
   let responseGated = false;
@@ -646,9 +716,9 @@ export async function runGoal(goal: string, opts: { allowSecurityResearch?: bool
   try {
     const chatResult = await palAdapter.callTool('chat', {
       prompt: sanitizedGoal,
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-2.5-flash',
       working_directory_absolute_path: '/workspaces/turbo-flow-claude',
-      absolute_file_paths: [contextFile],
+      absolute_file_paths: [contextFile, ...fetchedFiles],
       thinking_mode: 'high',
       temperature: 0.3,
     }) as { response?: string; content?: string; text?: string };
@@ -671,6 +741,11 @@ export async function runGoal(goal: string, opts: { allowSecurityResearch?: bool
       }
     } catch {
       // No pal_generated.code — use the response directly
+    }
+
+    // Clean up fetched URL temp files — PAL has read them, no longer needed
+    for (const f of fetchedFiles) {
+      await unlink(f).catch(() => {});
     }
 
     researchResponse = scrub(actualContent);
@@ -736,7 +811,7 @@ export async function runGoal(goal: string, opts: { allowSecurityResearch?: bool
       '# Bunker Strategy v1 — GTIG Feb 2026 Infrastructure Trust Gap',
       '',
       `> Generated: ${new Date().toISOString()}`,
-      `> Model: gemini-3-pro-preview via PAL`,
+      `> Model: gemini-2.5-flash via PAL`,
       `> AIDefence: ${aidefenceStatus} | RVF Witnessed: pending`,
       `> Goal: ${goal.slice(0, 120)}...`,
     ];
@@ -814,9 +889,9 @@ const isDirectExecution =
   import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'));
 
 if (isDirectExecution) {
-  const { goal, allowSecurityResearch } = parseGoalArgs();
+  const { goal, allowSecurityResearch, fetchUrls } = parseGoalArgs();
   if (goal) {
-    runGoal(goal, { allowSecurityResearch }).catch(console.error);
+    runGoal(goal, { allowSecurityResearch, fetchUrls }).catch(console.error);
   } else {
     firstFlight().catch(console.error);
   }

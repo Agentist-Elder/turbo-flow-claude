@@ -31,6 +31,8 @@ export interface MCPTransportConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** Override the MCP SDK's default 60s request timeout (ms). Use for slow upstream APIs. */
+  requestTimeoutMs?: number;
 }
 
 export interface CircuitBreakerConfig {
@@ -238,7 +240,8 @@ export class MCPTransportAdapter {
     }
 
     const exec = async (): Promise<unknown> => {
-      const response = await this.client!.callTool({ name: toolName, arguments: args });
+      const timeoutOpts = this.config.requestTimeoutMs ? { timeout: this.config.requestTimeoutMs } : undefined;
+      const response = await this.client!.callTool({ name: toolName, arguments: args }, undefined, timeoutOpts);
 
       if (response.isError) {
         throw new Error(`MCP tool error from '${toolName}': ${JSON.stringify(response.content)}`);
@@ -250,6 +253,46 @@ export class MCPTransportAdapter {
       }
 
       throw new Error(`Unexpected response format from '${toolName}': ${JSON.stringify(response)}`);
+    };
+
+    try {
+      const result = await exec();
+      this.breaker.recordSuccess();
+      return result;
+    } catch (err) {
+      this.breaker.recordFailure();
+      throw err;
+    }
+  };
+
+  /**
+   * Calls an MCP tool and returns raw text content without JSON.parse.
+   * Use for tools that return plain text (e.g. Playwright browser_snapshot).
+   */
+  callToolText = async (
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<string> => {
+    this.breaker.allowRequest();
+
+    if (!this.client) {
+      throw new Error('MCPTransportAdapter: client not connected');
+    }
+
+    const exec = async (): Promise<string> => {
+      const timeoutOpts = this.config.requestTimeoutMs ? { timeout: this.config.requestTimeoutMs } : undefined;
+      const response = await this.client!.callTool({ name: toolName, arguments: args }, undefined, timeoutOpts);
+
+      if (response.isError) {
+        throw new Error(`MCP tool error from '${toolName}': ${JSON.stringify(response.content)}`);
+      }
+
+      const content = response.content as Array<{ type: string; text?: string }>;
+      if (content.length > 0 && content[0].type === 'text' && typeof content[0].text === 'string') {
+        return content[0].text;
+      }
+
+      return JSON.stringify(response.content);
     };
 
     try {
