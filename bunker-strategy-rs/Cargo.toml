@@ -1,0 +1,27 @@
+[package]
+name = "bunker-strategy"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bunker_strategy"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+# DID creation, VC/VP issuance and verification.
+# Feature flags are starting guesses — cargo check will surface the real names.
+ssi = { version = "0.14.0", features = ["ed25519", "secp256k1"] }
+
+# Sigstore artifact signature verification.
+sigstore = "0.13.0"
+
+# macOS Endpoint Security framework — only linked on macOS.
+[target.'cfg(target_os = "macos")'.dependencies]
+endpoint-sec = "0.4.3"
