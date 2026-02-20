@@ -98,3 +98,20 @@ Both RFC 3161 timestamping and Sigstore Rekor provide mechanisms for establishin
 | [^1] | [https://www.rfc-editor.org/rfc/rfc3161.html](https://www.rfc-editor.org/rfc/rfc3161.html) | `2eb5d864cf3dcd65cca9ef131be2d1b1f171c08b9284fcf6a3301d2e47c5f15e` | 2026-02-20T04:03:00.954Z |
 | [^2] | [https://en.wikipedia.org/wiki/Trusted_timestamping](https://en.wikipedia.org/wiki/Trusted_timestamping) | `6c6e9cc506a1a55ee9465505489ef84ffc08d80fa3b0b82b0ec330675838eb4e` | 2026-02-20T04:03:01.061Z |
 | [^3] | [https://docs.sigstore.dev/logging/overview/](https://docs.sigstore.dev/logging/overview/) | `80f7fd71d86db4a356817ce4bd662a47fb15d53d303dede6fac3d6841c6b80f2` | 2026-02-20T04:03:01.405Z |
+
+---
+
+## Provenance & Verification
+
+| Field | Value |
+|-------|-------|
+| **Signed** | 2026-02-20T21:09:11.000Z |
+| **Signer** | GitHub OIDC (keyless, Sigstore) |
+| **Bundle** | `Bunker-Strategy-v1.md.bundle` |
+| **Rekor log index** | 974858064 |
+| **Verify** | `cosign verify-blob Bunker-Strategy-v1.md --bundle Bunker-Strategy-v1.md.bundle` |
+
+[View on Rekor transparency log](https://search.sigstore.dev/?logIndex=974858064)
+
+> This document was signed with [Sigstore/cosign](https://sigstore.dev) keyless signing.
+> The signature is publicly verifiable without any private keys.
