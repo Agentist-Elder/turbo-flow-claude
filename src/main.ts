@@ -12,10 +12,14 @@
  *   4. Simulate an injected message → SecurityViolationError caught + threat reported
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { readFile, writeFile, mkdir, unlink, copyFile, readdir } from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+const execFileAsync = promisify(execFile);
 import { performance } from 'perf_hooks';
 import { AIDefenceCoordinator, ThreatLevel } from './security/coordinator.js';
 import { NeuralLiveMCPClient, type MCPToolCaller } from './security/live-mcp-client.js';
@@ -545,10 +549,115 @@ function stripHtml(html: string): string {
 
 /**
  * Fetches each URL with Node.js fetch(), strips HTML, saves to a temp file.
+ * Returns structured records including SHA-256 of the fetched text so citations
+ * can be pinned to the state of the source at research time.
  * Failures are non-fatal — a warning is logged and the URL is skipped.
  */
-async function fetchUrlsToFiles(urls: string[]): Promise<string[]> {
-  const files: string[] = [];
+export interface FetchedSource {
+  url: string;
+  filePath: string;
+  sha256: string;
+  fetchedAt: string; // ISO timestamp
+  charCount: number;
+}
+
+// ── RFC 3161 Timestamp Attestation ───────────────────────────────────
+//
+// Three-tier fallback — each tier recorded in the document so the reader
+// knows exactly what authority attested the research time:
+//   1. DigiCert  — major CA, widely trusted, no API key
+//   2. Sectigo   — independent CA fallback
+//   3. Local     — HMAC-SHA256 self-attestation (author-asserted, noted as such)
+
+export type TsaTier = 'DigiCert' | 'Sectigo' | 'local';
+
+export interface TsaAttestation {
+  tier: TsaTier;
+  timestamp: string;       // ISO — when the attestation was made
+  manifestText: string;    // Plain text submitted to SHA-256: one "url sha256 fetchedAt" line per source
+  manifestHash: string;    // SHA-256 of manifestText — this is what the TSA signed
+  tsrBase64?: string;      // Raw RFC 3161 response, base64 (DigiCert / Sectigo)
+  localHmac?: string;      // HMAC-SHA256 of manifestHash+timestamp (local tier)
+  verifyCommand?: string;  // openssl command an auditor can run to verify the TSA token
+}
+
+const TSA_ENDPOINTS: Array<{ name: TsaTier; url: string }> = [
+  { name: 'DigiCert', url: 'http://timestamp.digicert.com' },
+  { name: 'Sectigo',  url: 'http://timestamp.sectigo.com' },
+];
+
+async function requestTsaTimestamp(
+  manifestText: string,
+  manifestHash: string,
+): Promise<TsaAttestation> {
+  const timestamp = new Date().toISOString();
+  const tmp = tmpdir();
+  const id = Date.now();
+  const manifestFile = join(tmp, `ruvbot_manifest_${id}.txt`);
+  const tsqFile     = join(tmp, `ruvbot_ts_${id}.tsq`);
+  const tsrFile     = join(tmp, `ruvbot_ts_${id}.tsr`);
+
+  try {
+    // Write manifest text — openssl ts hashes this file to produce the TSQ.
+    // sha256(manifestText) === manifestHash by construction, so the TSA
+    // timestamps the same value we record in manifestHash.
+    await writeFile(manifestFile, manifestText, 'utf8');
+
+    // Generate a correctly DER-encoded TSQ via openssl (avoids hand-rolled ASN.1 bugs)
+    await execFileAsync('openssl', [
+      'ts', '-query',
+      '-data', manifestFile,
+      '-sha256',
+      '-cert',       // request TSA to embed its signing cert in the response
+      '-out', tsqFile,
+    ]);
+
+    const tsq = await readFile(tsqFile);
+
+    for (const tsa of TSA_ENDPOINTS) {
+      try {
+        // tsq.buffer is a shared ArrayBuffer that may have an offset —
+        // slice to exact bounds to avoid sending garbage prefix bytes.
+        const body = tsq.buffer.slice(tsq.byteOffset, tsq.byteOffset + tsq.byteLength);
+        const res = await fetch(tsa.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/timestamp-query' },
+          body,
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = await res.arrayBuffer();
+        const tsrBase64 = Buffer.from(buf).toString('base64');
+        console.log(`[GOAP] TSA attestation: ${tsa.name} ✓`);
+        const verifyCommand =
+          `# 1. Save the manifest text from .tsa.json → manifest.txt\n` +
+          `# 2. Decode and verify the TSA token:\n` +
+          `base64 -d <<< '$TSR_BASE64' > response.tsr\n` +
+          `openssl ts -verify -data manifest.txt -in response.tsr -CAfile /etc/ssl/certs/ca-certificates.crt`;
+        return { tier: tsa.name, timestamp, manifestText, manifestHash, tsrBase64, verifyCommand };
+      } catch (err) {
+        console.warn(`[GOAP] TSA ${tsa.name} failed: ${err} — trying next`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[GOAP] openssl ts failed: ${err} — falling back to local attestation`);
+  } finally {
+    for (const f of [manifestFile, tsqFile, tsrFile]) {
+      await unlink(f).catch(() => {});
+    }
+  }
+
+  // Local fallback — HMAC-SHA256 self-attestation (noted as such in output)
+  console.warn('[GOAP] All external TSAs unreachable — using local self-attestation');
+  const { createHmac } = await import('crypto');
+  const localHmac = createHmac('sha256', 'ruvbot-local-tsa-v1')
+    .update(`${manifestHash}|${timestamp}`)
+    .digest('hex');
+  return { tier: 'local', timestamp, manifestText, manifestHash, localHmac };
+}
+
+async function fetchUrlsToFiles(urls: string[]): Promise<FetchedSource[]> {
+  const sources: FetchedSource[] = [];
   for (const url of urls) {
     try {
       const res = await fetch(url, {
@@ -558,16 +667,18 @@ async function fetchUrlsToFiles(urls: string[]): Promise<string[]> {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const text = stripHtml(html).slice(0, 8_000);
+      const sha256 = createHash('sha256').update(text, 'utf8').digest('hex');
+      const fetchedAt = new Date().toISOString();
       const safeName = url.replace(/[^a-z0-9]/gi, '_').slice(0, 60);
       const tmpFile = `/tmp/ruvbot_fetch_${safeName}.txt`;
-      await writeFile(tmpFile, `# Fetched from: ${url}\n\n${text}`, 'utf-8');
-      files.push(tmpFile);
-      console.log(`[GOAP] Fetched ${text.length} chars from ${url}`);
+      await writeFile(tmpFile, `# Fetched from: ${url}\n# SHA-256: ${sha256}\n# Fetched: ${fetchedAt}\n\n${text}`, 'utf-8');
+      sources.push({ url, filePath: tmpFile, sha256, fetchedAt, charCount: text.length });
+      console.log(`[GOAP] Fetched ${text.length} chars from ${url} (sha256: ${sha256.slice(0, 16)}...)`);
     } catch (err) {
       console.warn(`[GOAP] Fetch failed for ${url}: ${err}`);
     }
   }
-  return files;
+  return sources;
 }
 
 // ── Goal Runner (Phase 12a — Option B: Self-Contained) ──────────────
@@ -716,15 +827,67 @@ export async function runGoal(
     return log;
   }
 
-  // ── 3b. Phase 0: URL Fetch (optional — populates live context for PAL) ──
+  // ── 3b. Phase 0: URL Fetch + TSA Attestation ─────────────────────────
 
-  const fetchedFiles: string[] = [];
+  const fetchedSources: FetchedSource[] = [];
+  let tsaAttestation: TsaAttestation | null = null;
+
   if (opts.fetchUrls && opts.fetchUrls.length > 0) {
     console.log(`\n[GOAP] === PHASE 0: URL FETCH (${opts.fetchUrls.length} URLs) ===`);
-    const files = await fetchUrlsToFiles(opts.fetchUrls);
-    fetchedFiles.push(...files);
-    console.log(`[GOAP] Fetch complete: ${fetchedFiles.length}/${opts.fetchUrls.length} files ready for PAL`);
+    const sources = await fetchUrlsToFiles(opts.fetchUrls);
+    fetchedSources.push(...sources);
+    console.log(`[GOAP] Fetch complete: ${fetchedSources.length}/${opts.fetchUrls.length} sources ready for PAL`);
+
+    if (fetchedSources.length > 0) {
+      // Build manifest string and hash it — this is what the TSA timestamps
+      const manifestLines = fetchedSources.map(s =>
+        `${s.url} ${s.sha256} ${s.fetchedAt}`
+      ).join('\n');
+      const manifestHash = createHash('sha256').update(manifestLines, 'utf8').digest('hex');
+      console.log(`[GOAP] === PHASE 0b: TSA ATTESTATION ===`);
+      tsaAttestation = await requestTsaTimestamp(manifestLines, manifestHash);
+
+      // Persist the TSA token alongside the output document
+      const tsaFile = '/workspaces/turbo-flow-claude/docs/research/Bunker-Strategy-v1.tsa.json';
+      await writeFile(tsaFile, JSON.stringify(tsaAttestation, null, 2), 'utf-8');
+      console.log(`[GOAP] TSA record saved: ${tsaFile}`);
+    }
   }
+
+  // Build source manifest — passed to PAL so it can generate pinned footnotes
+  const fetchedFiles = fetchedSources.map(s => s.filePath);
+
+  const tsaNote = tsaAttestation
+    ? tsaAttestation.tier === 'local'
+      ? '⚠ Research-time attestation: **local self-attestation** (external TSAs unreachable at research time)'
+      : `✓ Research-time attestation: **${tsaAttestation.tier}** RFC 3161 TSA (see \`Bunker-Strategy-v1.tsa.json\`)`
+    : '';
+
+  const sourceManifest = fetchedSources.length > 0
+    ? [
+        '\n\n---',
+        '## CITATION INSTRUCTIONS FOR THIS RESEARCH',
+        'The following sources were fetched at research time and their content is in the attached files.',
+        'You MUST use markdown footnotes throughout the document body wherever you draw on these sources.',
+        'Footnote format in body: [^N] where N matches the ref number below.',
+        'At the end of the document, add an "## Appendix: Source References" section with this exact table:',
+        '',
+        '| Ref | Source | SHA-256 (at research time) | Fetched |',
+        '|-----|--------|---------------------------|---------|',
+        ...fetchedSources.map((s, i) =>
+          `| [^${i + 1}] | [${s.url}](${s.url}) | \`${s.sha256}\` | ${s.fetchedAt} |`
+        ),
+        '',
+        tsaNote,
+        '',
+        'The SHA-256 values are immutable — do not alter them. They pin the source to its state at research time.',
+        'A reader clicking the URL can verify whether the source has changed since this document was signed.',
+        '',
+        'LENGTH CONSTRAINT: The entire research document (excluding the appendix) must be under 3,000 words.',
+        'Be concise. Use structured headings, not exhaustive prose. One paragraph per point is sufficient.',
+        '---',
+      ].join('\n')
+    : '';
 
   // ── 4. PAL Chat: research with file-based context ───────────────────
 
@@ -733,8 +896,8 @@ export async function runGoal(
 
   console.log(`\n[GOAP] === PHASE 2: PAL CHAT (research with context) ===`);
   console.log(`[GOAP] Context file: ${contextFile}`);
-  if (fetchedFiles.length > 0) {
-    console.log(`[GOAP] Live fetched files: ${fetchedFiles.join(', ')}`);
+  if (fetchedSources.length > 0) {
+    console.log(`[GOAP] Live fetched sources: ${fetchedSources.map(s => s.url).join(', ')}`);
   }
 
   let researchResponse = '';
@@ -742,7 +905,7 @@ export async function runGoal(
 
   try {
     const chatResult = await palAdapter.callTool('chat', {
-      prompt: sanitizedGoal,
+      prompt: sanitizedGoal + sourceManifest,
       model: 'gemini-2.5-flash',
       working_directory_absolute_path: '/workspaces/turbo-flow-claude',
       absolute_file_paths: [contextFile, ...fetchedFiles],
@@ -775,7 +938,20 @@ export async function runGoal(
       await unlink(f).catch(() => {});
     }
 
-    researchResponse = scrub(actualContent);
+    // Strip Codespace hook injections appended after PAL's real content.
+    // Pattern: "---\n\nAGENT'S TURN:" or bare "AGENT'S TURN:" suffix.
+    const hookPattern = /\n[-–—]*\s*\nAGENT'S TURN:[\s\S]*/i;
+    const stripped = actualContent.replace(hookPattern, '').trimEnd();
+
+    // Detect PAL's "files_required" refusal JSON — fail fast with a clear message.
+    if (stripped.includes('"status": "files_required_to_continue"') ||
+        stripped.includes('"files_needed"')) {
+      console.warn('[GOAP] PAL refused: missing source files for the requested topic.');
+      console.warn('[GOAP] Add relevant URLs via --fetch-urls and retry.');
+      throw new Error('PAL refused: files_required_to_continue');
+    }
+
+    researchResponse = scrub(stripped);
     console.log(`[GOAP] PAL responded (${researchResponse.length} chars)`);
 
     // Gate the response through AIDefence before witnessing
