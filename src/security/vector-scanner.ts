@@ -11,6 +11,9 @@
 
 import { performance } from 'perf_hooks';
 import { createRequire } from 'module';
+import { mkdirSync } from 'fs';
+import { dirname } from 'path';
+import { DB_CONFIG, MinCutGate, type GateDecision, estimateLambda } from './min-cut-gate.js';
 
 const _require = createRequire(import.meta.url);
 const { VectorDB } = _require('ruvector');
@@ -30,6 +33,10 @@ export interface VectorScannerConfig {
   attackThreshold: number;
   suspiciousThreshold: number;
   searchK: number;
+}
+
+export interface ScanResultWithGate extends AnalysisResult {
+  gate_decision?: GateDecision;
 }
 
 export const DEFAULT_SCANNER_CONFIG: VectorScannerConfig = {
@@ -186,6 +193,8 @@ export class VectorScanner {
   private db: InstanceType<typeof VectorDB> | null = null;
   private initialized = false;
   private patternRegistry: PatternEntry[] = [];
+  private minCutGate = new MinCutGate();
+  private lastGateDecision: GateDecision | null = null;
 
   constructor(config: Partial<VectorScannerConfig> = {}) {
     this.config = { ...DEFAULT_SCANNER_CONFIG, ...config };
@@ -194,11 +203,26 @@ export class VectorScanner {
   /** Open the vector database. Must be called before scan(). */
   async initialize(): Promise<void> {
     if (this.initialized) return;
+
+    // Ensure the data directory exists before VectorDB tries to create the file.
+    // Previously this was omitted, causing silent in-memory fallback.
+    mkdirSync(dirname(this.config.dbPath), { recursive: true });
+
+    // Phase 15 fix: use correct @ruvector/core field names.
+    // Old (broken): { path, metric: 'cosine' } — fields silently ignored → in-memory only.
+    // New (correct): { storagePath, distanceMetric: 'Cosine' } — persists to disk.
     this.db = new VectorDB({
-      path: this.config.dbPath,
+      storagePath: this.config.dbPath,
       dimensions: this.config.dimensions,
-      metric: 'cosine',
+      distanceMetric: 'Cosine',       // capital C required — lowercase throws enum error
+      hnswConfig: {
+        m: DB_CONFIG.m,
+        efConstruction: DB_CONFIG.efConstruction,
+        efSearch: DB_CONFIG.efSearch,
+        maxElements: DB_CONFIG.maxElements,
+      },
     });
+
     this.initialized = true;
   }
 
@@ -246,6 +270,11 @@ export class VectorScanner {
       console.error('[VectorScanner] HNSW search failed:', err);
       return { classification: 'informational', confidence: 0, vector_matches: 0, dtw_score: 1.0 };
     }
+
+    // 3a. λ-gate routing decision (Phase 15 AISP spec ⟦Γ⟧)
+    // knnDistances: cosine distance (lower = closer match)
+    const knnDistances = results.map(r => r.score);
+    this.lastGateDecision = this.minCutGate.decide(knnDistances, this.patternRegistry.length);
 
     // 4. Classify based on cosine distance thresholds
     let bestScore = 1.0;
@@ -368,5 +397,21 @@ export class VectorScanner {
   /** Number of patterns tracked by this instance. */
   get registrySize(): number {
     return this.patternRegistry.length;
+  }
+
+  /**
+   * Last gate routing decision from scan().
+   * Includes λ estimate, threshold, and whether MinCut_Gate was selected.
+   * null if scan() has not been called yet.
+   */
+  get lastGate(): GateDecision | null {
+    return this.lastGateDecision;
+  }
+
+  /**
+   * Measure λ for a given set of k-NN distances (exposed for testing).
+   */
+  measureLambda(knnDistances: number[]): number {
+    return estimateLambda(knnDistances);
   }
 }
