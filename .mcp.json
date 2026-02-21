@@ -27,9 +27,22 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest", "--headless"],
+      "args": [
+        "@playwright/mcp@latest",
+        "--headless"
+      ],
       "env": {},
       "autoStart": false
+    },
+    "agentic-qe": {
+      "command": "aqe-mcp",
+      "args": [],
+      "env": {
+        "AQE_PROJECT_ROOT": "/workspaces/turbo-flow-claude",
+        "AQE_LEARNING_ENABLED": "true",
+        "AQE_WORKERS_ENABLED": "true",
+        "NODE_ENV": "production"
+      }
     }
   }
 }

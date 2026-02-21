@@ -26,3 +26,10 @@ node_modules/
 # RuVector intelligence data
 .ruvector/
 .claude/statusline.sh
+
+# Runtime database files (not code — do not track binary changes)
+ruvector.db
+*.db.bak
+
+# Agentic QE runtime memory (SQLite + config generated at runtime)
+.agentic-qe/
