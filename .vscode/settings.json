@@ -1,0 +1,13 @@
+{
+  // Rust-analyzer: exclude bunker-strategy-rs from workspace analysis.
+  //
+  // The crate has ssi + sigstore dependencies (1.1 GB target, 553 dep files).
+  // Rust-analyzer OOMs in the Codespace trying to index that dependency tree.
+  // The crate contains Phase D stubs only — no Rust IDE features are needed.
+  //
+  // To re-enable temporarily: comment out "rust-analyzer.files.excludeDirs"
+  // and restart the Rust Analyzer server.
+  "rust-analyzer.files.excludeDirs": [
+    "bunker-strategy-rs"
+  ]
+}

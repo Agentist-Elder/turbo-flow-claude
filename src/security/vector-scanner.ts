@@ -29,6 +29,8 @@ export interface AnalysisResult {
 
 export interface VectorScannerConfig {
   dbPath: string;
+  /** Path to the seeded coherence DB for gate routing (ruvbot-coherence.db). */
+  coherenceDbPath?: string;
   dimensions: number;
   attackThreshold: number;
   suspiciousThreshold: number;
@@ -41,6 +43,7 @@ export interface ScanResultWithGate extends AnalysisResult {
 
 export const DEFAULT_SCANNER_CONFIG: VectorScannerConfig = {
   dbPath: '.claude-flow/data/attack-patterns.db',
+  coherenceDbPath: '.claude-flow/data/ruvbot-coherence.db',
   dimensions: 384,
   attackThreshold: 0.3,
   suspiciousThreshold: 0.5,
@@ -191,9 +194,11 @@ export interface ThreatCluster {
 export class VectorScanner {
   private config: VectorScannerConfig;
   private db: InstanceType<typeof VectorDB> | null = null;
+  private coherenceDb: InstanceType<typeof VectorDB> | null = null;
   private initialized = false;
   private patternRegistry: PatternEntry[] = [];
   private minCutGate = new MinCutGate();
+  private coherenceGate = new MinCutGate();
   private lastGateDecision: GateDecision | null = null;
 
   constructor(config: Partial<VectorScannerConfig> = {}) {
@@ -222,6 +227,27 @@ export class VectorScanner {
         maxElements: DB_CONFIG.maxElements,
       },
     });
+
+    // Open coherence DB for gate routing (separate from attack-patterns DB).
+    // Fails gracefully — gate defaults to L3_Gate if DB is unavailable.
+    if (this.config.coherenceDbPath) {
+      try {
+        mkdirSync(dirname(this.config.coherenceDbPath), { recursive: true });
+        this.coherenceDb = new VectorDB({
+          storagePath: this.config.coherenceDbPath,
+          dimensions: this.config.dimensions,
+          distanceMetric: 'Cosine',
+          hnswConfig: {
+            m: DB_CONFIG.m,
+            efConstruction: DB_CONFIG.efConstruction,
+            efSearch: DB_CONFIG.efSearch,
+            maxElements: DB_CONFIG.maxElements,
+          },
+        });
+      } catch (err) {
+        console.warn('[VectorScanner] Coherence DB unavailable (gate will default to L3):', err);
+      }
+    }
 
     this.initialized = true;
   }
@@ -413,5 +439,37 @@ export class VectorScanner {
    */
   measureLambda(knnDistances: number[]): number {
     return estimateLambda(knnDistances);
+  }
+
+  /**
+   * Compute the MinCutGate routing decision for an input by searching
+   * the coherence DB (ruvbot-coherence.db, seeded with 630 synthetic patterns).
+   *
+   * Uses db.len() — not patternRegistry.length — so the gate reflects
+   * the persisted DB size regardless of how many patterns were inserted
+   * in this session.
+   *
+   * Fails safe: returns L3_Gate decision if the coherence DB is unavailable
+   * or the search throws. Never throws to the caller.
+   */
+  async computeGateDecision(input: string): Promise<GateDecision> {
+    if (!this.initialized) await this.initialize();
+
+    if (!this.coherenceDb) {
+      return this.coherenceGate.decide([], 0);  // safe default
+    }
+
+    const normalized = normalizeInput(input);
+    const vector = textToVector(normalized, this.config.dimensions);
+
+    try {
+      const results = await this.coherenceDb.search({ vector, k: this.config.searchK });
+      const knnDistances = results.map((r: SearchResult) => r.score);
+      const dbSize = await this.coherenceDb.len();
+      return this.coherenceGate.decide(knnDistances, dbSize);
+    } catch (err) {
+      console.warn('[VectorScanner] Coherence gate search failed (L3_Gate default):', err);
+      return this.coherenceGate.decide([], 0);
+    }
   }
 }

@@ -12,6 +12,8 @@
  */
 
 import { performance } from 'perf_hooks';
+import { VectorScanner } from './vector-scanner.js';
+import type { GateDecision } from './min-cut-gate.js';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -199,6 +201,7 @@ export class MockMCPClient implements IMCPClient {
 export class AIDefenceCoordinator {
   private config: CoordinatorConfig;
   private mcp: IMCPClient;
+  private vectorScanner: VectorScanner;
 
   constructor(config: Partial<CoordinatorConfig> = {}, mcpClient?: IMCPClient) {
     this.config = {
@@ -207,6 +210,7 @@ export class AIDefenceCoordinator {
       features: { ...DEFAULT_CONFIG.features, ...config.features },
     };
     this.mcp = mcpClient ?? new MockMCPClient();
+    this.vectorScanner = new VectorScanner();
   }
 
   /**
@@ -251,6 +255,29 @@ export class AIDefenceCoordinator {
       });
     } catch (err) {
       this.failOpen('L2_ANALYZE', err, verdicts, timings, t2);
+    }
+
+    // ── Coherence Gate (between L2 and L3) ───────────────────────
+    // Searches ruvbot-coherence.db with the input embedding and uses the
+    // kNN density (λ proxy) to modulate l2Score before the L3 threshold check.
+    //
+    // Conservative design:
+    //   - MinCut_Gate route (high density): l2Score += 0.05, capped at 1.0
+    //   - L3_Gate route (sparse / cold-start): no change
+    //   - Any failure: fail-open (no-op), never blocks on gate error
+    //
+    // The ±0.05 modifier pushes borderline inputs (e.g. l2Score=0.85) over
+    // the 0.90 block threshold when the input lands in a dense pattern cluster.
+    // It cannot create false positives on clean inputs: l2Score must already
+    // be near the threshold for the boost to matter.
+    let gateDecision: GateDecision | null = null;
+    try {
+      gateDecision = await this.vectorScanner.computeGateDecision(currentInput);
+      if (gateDecision.route === 'MinCut_Gate') {
+        l2Score = Math.min(1.0, l2Score + 0.05);
+      }
+    } catch (err) {
+      console.warn('[AIDefence] Coherence gate error (fail-open, no-op):', err);
     }
 
     // ── L3: Safety Gate (fail-CLOSED) ────────────────────────────
