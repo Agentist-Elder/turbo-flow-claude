@@ -1,7 +1,19 @@
 # CLAUDE.md — RuvBot Turbo-Flow Project Intelligence
 
 > Hand-authored ground truth. Do not overwrite with `generate-claude-md.sh`.
-> Last updated: 2026-02-21 (Phase 14 complete, Phase 15 planned)
+> Last updated: 2026-02-22 (Phase 15 partial — coherence gate wired)
+
+---
+
+## Behavioral Rules (Always Enforced)
+
+- Do what has been asked; nothing more, nothing less
+- ALWAYS read a file before editing it
+- NEVER commit secrets, credentials, or `.env` files
+- NEVER create files unless absolutely necessary — prefer editing existing ones
+- Batch parallel operations (file reads, tool calls) in one message when independent
+- Keep source files under 500 lines where practical; security modules may exceed this
+- After spawning an AQE swarm task, STOP and wait — do not poll `task_status` repeatedly
 
 ---
 
@@ -28,9 +40,11 @@ src/
   main.ts                  # Entry point: firstFlight() + runGoal() GOAP pipeline
   pq-wrap.ts               # Post-quantum wrapper (ML-DSA-65 / FIPS 204)
   publish.ts               # Publishing utilities
+  phase15-seed.ts          # Phase 15: seeds ruvbot-coherence.db (630 synthetic patterns)
   security/
-    coordinator.ts         # AIDefence 6-layer gate orchestrator
-    vector-scanner.ts      # HNSW attack-pattern scanner (ruvector)
+    coordinator.ts         # AIDefence 6-layer gate orchestrator (+ coherence gate)
+    vector-scanner.ts      # HNSW attack-pattern scanner + coherence DB gate routing
+    min-cut-gate.ts        # Phase 15: λ-gated router with hysteresis (AISP ⟦Γ⟧)
     explorer.ts            # GOAP explorer agent
     adaptive-learner.ts    # Hebbian pattern learner
     live-mcp-client.ts     # Live MCP client
@@ -40,13 +54,15 @@ src/
     reviewer-logic.ts      # Reviewer swarm logic
 
 docs/research/             # GOAP output documents (RVF-witnessed)
-.claude-flow/data/         # HNSW database files (CURRENTLY EMPTY — see Known Bug below)
+.claude-flow/data/
+  ruvbot-coherence.db      # Phase 15: 630 synthetic GOAP-phase patterns (git-ignored, reproducible)
 .agentic-qe/               # AQE v3 memory + config (SQLite)
+.vscode/settings.json      # rust-analyzer: excludes bunker-strategy-rs (OOM prevention)
 ```
 
 ---
 
-## Phase History (Phases 1–14 Complete)
+## Phase History (Phases 1–15 partial)
 
 | Phase | Description |
 |-------|-------------|
@@ -56,32 +72,36 @@ docs/research/             # GOAP output documents (RVF-witnessed)
 | 12b   | URL fetch phase (Node.js fetch, --fetch-urls CLI flag) |
 | 13    | DID Passport design (pseudocode only — not built) |
 | 14    | TSA attestation (DigiCert RFC 3161), Cosign/Rekor publish, ML-DSA-65 PQ re-wrap |
+| 15    | VectorDB fix, min-cut gate AISP spec, coherence DB seeded, L2→L3 gate wired (see below) |
 
-**Phase 15** (planned): Replace/augment AIDefence L3 with ruvector min-cut coherence gate
-(arXiv:2512.13105 — El-Hayek, Henzinger, Li). Requires VectorDB bug fix first (see below).
+**Phase 15 status**: Coherence gate is live and changes security outcomes. The fictional
+`@ruvector/mincut-wasm` dependency has been replaced with an L2 kNN density approach using
+the seeded `ruvbot-coherence.db`. The `runGate()` stub remains for future exact λ computation.
 
 ---
 
-## ⚠️ Known Bug: VectorDB Has Been In-Memory Since Phase 1
+## Phase 15 — What Was Built (2026-02-22)
 
-`src/security/vector-scanner.ts` initialises `VectorDB` with **wrong field names**:
-
+### VectorDB Fix (COMPLETE)
+The silent in-memory bug is fixed. `vector-scanner.ts` now uses correct field names:
 ```typescript
-// BROKEN (current) — fields silently ignored, DB is in-memory only
-new VectorDB({ path: '...', metric: 'cosine', dimensions: 384 })
-
-// CORRECT — Phase 15 must use these exact names
-new VectorDB({
-  storagePath: '.claude-flow/data/ruvbot-coherence.db',
-  distanceMetric: 'Cosine',   // capital C — lowercase throws enum error
-  dimensions: 384,
-  hnswConfig: { m: 32, efConstruction: 200, efSearch: 100, maxElements: 1_000_000 }
-})
+new VectorDB({ storagePath, distanceMetric: 'Cosine', dimensions, hnswConfig })
 ```
+`.claude-flow/data/ruvbot-coherence.db` exists on disk (2.6 MB, 630 patterns, git-ignored).
 
-**Consequence**: `.claude-flow/data/` is empty. All 201 tests passed against an in-memory
-database. No attack patterns were ever persisted. This must be fixed in Phase 15 before any
-coherence-gate work begins.
+### Coherence Gate (LIVE — changes security outcomes)
+Architecture: `L1 → L2 → CoherenceGate → L3 → L4`
+
+- `min-cut-gate.ts`: λ-gated router (AISP ⟦Γ⟧), hysteresis ±10%, honest stub for `runGate()`
+- `phase15-seed.ts`: seeds 630 synthetic vectors (90 × 7 GOAP phases) into `ruvbot-coherence.db`
+- `vector-scanner.ts`: `computeGateDecision(input)` searches coherence DB, uses `db.len()` for real dbSize, fails safe to L3_Gate
+- `coordinator.ts`: coherence gate between L2 and L3 — `MinCut_Gate` route adds +0.05 to l2Score (capped 1.0), fail-open on error
+
+### Known Limitations
+- Seeded patterns are synthetic (hash-derived), not real attack embeddings. λ signal has low threat fidelity until real red-team sessions populate the DB.
+- `runGate()` stub remains — `@ruvector/mincut-wasm` does not exist on npm (404 confirmed). Exact λ computation deferred indefinitely.
+- `attack-patterns.db` (L2 scanner) is still empty — no real attack patterns inserted yet.
+- `MinCutGate.coherenceGate` hysteresis is not thread-safe (acceptable for single-threaded Node.js).
 
 ---
 
@@ -120,6 +140,10 @@ mcp__agentic-qe__quality_assess({ scope: "full", includeMetrics: true })
 Wait for the swarm's cryptographic evidence before claiming an implementation correct.
 Use adversarial agents (`qe-devils-advocate`, `qe-security-auditor`) for security-critical
 work, not just test-generation agents.
+
+**AQE Swarm Discipline**: After calling `task_orchestrate`, do not poll `task_status` in a
+loop. If the task does not complete within two status checks, fall back to `security_scan_comprehensive`
+and manual adversarial review rather than blocking on a hung swarm.
 
 ### Test Execution (when tests must run)
 - NEVER `npm test` without `--run` flag (watch mode hangs CI)
@@ -238,11 +262,10 @@ Phase 6: Summary
 
 ---
 
-## Phase 15 Pre-Work Checklist (Next Session)
+## Phase 15 Remaining Work (Next Session)
 
-- [ ] Write AISP spec for VectorDB init contract (`docs/specs/phase15-vectordb.aisp`)
-- [ ] Fix `vector-scanner.ts`: `path` → `storagePath`, `metric:'cosine'` → `distanceMetric:'Cosine'`
-- [ ] Create `src/phase15-seed.ts`: agentic-synth bootstrap (~630 synthetic patterns, 90/phase × 7)
-- [ ] Examine `ruvector-mincut-wasm/src/lib.rs` for TypeScript API surface (λ metric)
-- [ ] Implement λ fallback wrapper (hysteresis, handoff to Phase 14 L3 within 20ms budget)
-- [ ] Delegate all verification to AQE swarm — use `qe-devils-advocate` + `qe-security-auditor`
+- [ ] Populate `attack-patterns.db` with real attack embeddings from red-team sessions
+- [ ] Replace synthetic coherence patterns with real GOAP-phase attack morphologies
+- [ ] Wire `MinCutGate.lastGate` into coordinator L2 verdict details for observability
+- [ ] Replace `runGate()` stub if exact min-cut computation becomes available
+- [ ] Delegate all verification to AQE swarm with `qe-devils-advocate` + `qe-security-auditor`
