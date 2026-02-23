@@ -279,6 +279,8 @@ export class AIDefenceCoordinator {
     // the 0.90 block threshold when the input lands in a dense pattern cluster.
     // It cannot create false positives on clean inputs: l2Score must already
     // be near the threshold for the boost to matter.
+    const tGate = performance.now();
+    const l2ScoreBefore = l2Score;
     let gateDecision: GateDecision | null = null;
     try {
       gateDecision = await this.vectorScanner.computeGateDecision(currentInput);
@@ -288,6 +290,31 @@ export class AIDefenceCoordinator {
     } catch (err) {
       console.warn('[AIDefence] Coherence gate error (fail-open, no-op):', err);
     }
+    // Record dedicated COHERENCE_GATE verdict for red-team observability.
+    // Always present — even on gate error — so the audit trail is never blind.
+    const gateDur = performance.now() - tGate;
+    timings['COHERENCE_GATE'] = gateDur;
+    verdicts.push({
+      layer: 'COHERENCE_GATE',
+      passed: true, // gate errors are fail-open; never block the request
+      score: gateDecision?.route === 'MinCut_Gate' ? 1.0 : 0.0,
+      latency_ms: gateDur,
+      details: gateDecision
+        ? {
+            route: gateDecision.route,
+            lambda: gateDecision.lambda,
+            threshold: gateDecision.threshold,
+            db_size: gateDecision.db_size,
+            reason: gateDecision.reason,
+            l2_score_delta: l2Score - l2ScoreBefore,
+            l2_score_after: l2Score,
+          }
+        : {
+            route: 'gate_error',
+            l2_score_delta: 0,
+            l2_score_after: l2Score,
+          },
+    });
 
     // ── L3: Safety Gate (fail-CLOSED) ────────────────────────────
     const t3 = performance.now();

@@ -174,3 +174,88 @@ describe('AIDefenceCoordinator — coherence gate score modulation', () => {
     await expect(coordinator.processRequest('test')).resolves.toBeDefined();
   });
 });
+
+// ── COHERENCE_GATE verdict payload shape ─────────────────────────────────────
+// Verifies the dedicated audit-trail entry added for red-team observability.
+
+describe('AIDefenceCoordinator — COHERENCE_GATE verdict payload', () => {
+  it('COHERENCE_GATE entry is always present in layer_verdicts', async () => {
+    const coordinator = new AIDefenceCoordinator({}, new StubMCPClient());
+    vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
+      .mockResolvedValue(makeGateDecision('L3_Gate'));
+
+    const result = await coordinator.processRequest('any input');
+    const entry = result.layer_verdicts.find(v => v.layer === 'COHERENCE_GATE');
+    expect(entry).toBeDefined();
+  });
+
+  it('COHERENCE_GATE appears between L2_ANALYZE and L3_SAFE in verdict order', async () => {
+    const coordinator = new AIDefenceCoordinator({}, new StubMCPClient());
+    vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
+      .mockResolvedValue(makeGateDecision('L3_Gate'));
+
+    const result = await coordinator.processRequest('any input');
+    const layers = result.layer_verdicts.map(v => v.layer);
+    const l2Idx = layers.indexOf('L2_ANALYZE');
+    const gateIdx = layers.indexOf('COHERENCE_GATE');
+    const l3Idx = layers.indexOf('L3_SAFE');
+    expect(gateIdx).toBeGreaterThan(l2Idx);
+    expect(gateIdx).toBeLessThan(l3Idx);
+  });
+
+  it('MinCut_Gate route: details.route is MinCut_Gate and l2_score_delta is 0.05', async () => {
+    const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.50));
+    vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
+      .mockResolvedValue(makeGateDecision('MinCut_Gate'));
+
+    const result = await coordinator.processRequest('dense input');
+    const entry = result.layer_verdicts.find(v => v.layer === 'COHERENCE_GATE')!;
+    expect(entry.details['route']).toBe('MinCut_Gate');
+    expect(entry.details['l2_score_delta']).toBeCloseTo(0.05, 5);
+    expect(entry.details['l2_score_after']).toBeCloseTo(0.55, 5);
+  });
+
+  it('L3_Gate route: details.route is L3_Gate and l2_score_delta is 0', async () => {
+    const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.50));
+    vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
+      .mockResolvedValue(makeGateDecision('L3_Gate'));
+
+    const result = await coordinator.processRequest('sparse input');
+    const entry = result.layer_verdicts.find(v => v.layer === 'COHERENCE_GATE')!;
+    expect(entry.details['route']).toBe('L3_Gate');
+    expect(entry.details['l2_score_delta']).toBe(0);
+  });
+
+  it('MinCut_Gate at l2Score=0.97: l2_score_delta reflects actual capped delta (0.03)', async () => {
+    const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.97));
+    vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
+      .mockResolvedValue(makeGateDecision('MinCut_Gate'));
+
+    const result = await coordinator.processRequest('near-max input');
+    const entry = result.layer_verdicts.find(v => v.layer === 'COHERENCE_GATE')!;
+    expect(entry.details['l2_score_delta']).toBeCloseTo(0.03, 5);
+    expect(entry.details['l2_score_after']).toBeCloseTo(1.0, 5);
+  });
+
+  it('gate error: COHERENCE_GATE entry still present with route gate_error', async () => {
+    const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.0));
+    vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
+      .mockRejectedValue(new Error('DB connection lost'));
+
+    const result = await coordinator.processRequest('any input');
+    const entry = result.layer_verdicts.find(v => v.layer === 'COHERENCE_GATE')!;
+    expect(entry).toBeDefined();
+    expect(entry.details['route']).toBe('gate_error');
+    expect(entry.details['l2_score_delta']).toBe(0);
+  });
+
+  it('COHERENCE_GATE entry has latency_ms recorded in layer_timings', async () => {
+    const coordinator = new AIDefenceCoordinator({}, new StubMCPClient());
+    vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
+      .mockResolvedValue(makeGateDecision('L3_Gate'));
+
+    const result = await coordinator.processRequest('any input');
+    expect(result.layer_timings).toHaveProperty('COHERENCE_GATE');
+    expect(result.layer_timings['COHERENCE_GATE']).toBeGreaterThanOrEqual(0);
+  });
+});

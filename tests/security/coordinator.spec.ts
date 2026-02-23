@@ -64,11 +64,11 @@ describe('AIDefenceCoordinator', () => {
       expect(r.safe_input).toBe(clean);
     });
 
-    it('produces all 4 layer verdicts: L1_SCAN, L2_ANALYZE, L3_SAFE, L4_PII', async () => {
+    it('produces all 5 layer verdicts: L1_SCAN, L2_ANALYZE, COHERENCE_GATE, L3_SAFE, L4_PII', async () => {
       const coord = new AIDefenceCoordinator({}, new MockMCPClient());
       const r = await coord.processRequest(clean);
       const names = r.layer_verdicts.map(v => v.layer);
-      expect(names).toEqual(['L1_SCAN', 'L2_ANALYZE', 'L3_SAFE', 'L4_PII']);
+      expect(names).toEqual(['L1_SCAN', 'L2_ANALYZE', 'COHERENCE_GATE', 'L3_SAFE', 'L4_PII']);
     });
 
     it('all layer verdicts have passed = true', async () => {
@@ -317,7 +317,7 @@ describe('AIDefenceCoordinator', () => {
       const r = await blockedCoord().processRequest('anything');
       const names = r.layer_verdicts.map(v => v.layer);
       expect(names).not.toContain('L4_PII');
-      expect(names).toEqual(['L1_SCAN', 'L2_ANALYZE', 'L3_SAFE']);
+      expect(names).toEqual(['L1_SCAN', 'L2_ANALYZE', 'COHERENCE_GATE', 'L3_SAFE']);
     });
   });
 
