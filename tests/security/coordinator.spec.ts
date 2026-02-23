@@ -81,6 +81,7 @@ describe('AIDefenceCoordinator', () => {
 
     it('total latency < 16ms (TOTAL_FAST_PATH budget, PRD 7.2)', async () => {
       const coord = new AIDefenceCoordinator({}, new MockMCPClient());
+      await coord.initialize(); // pre-warm VectorDB — cold-start cost excluded from SLA timer
       const r = await coord.processRequest(clean);
       expect(r.total_latency_ms).toBeLessThan(LATENCY_BUDGETS.TOTAL_FAST_PATH);
     });

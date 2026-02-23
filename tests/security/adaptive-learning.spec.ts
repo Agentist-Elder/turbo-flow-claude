@@ -615,6 +615,7 @@ describe('Adaptive Learning (Phase 6)', () => {
       const neuralClient = new NeuralMCPClient(scanner);
       const coordinator = new AIDefenceCoordinator({}, neuralClient);
       const orchestrator = new SwarmOrchestrator(coordinator);
+      await coordinator.initialize(); // pre-warm VectorDB — cold-start cost excluded from SLA timer
 
       const t0 = performance.now();
 

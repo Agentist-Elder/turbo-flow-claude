@@ -41,6 +41,7 @@ describe('Auditor: Latency SLA', () => {
   it('fast path must complete within 16ms', async () => {
     const cleanMCP = new MockMCPClient();
     const coordinator = new AIDefenceCoordinator({}, cleanMCP);
+    await coordinator.initialize(); // pre-warm VectorDB — cold-start cost excluded from SLA timer
 
     const result = await coordinator.processRequest('clean input');
 

@@ -214,6 +214,15 @@ export class AIDefenceCoordinator {
   }
 
   /**
+   * Pre-warm the VectorDB (coherence DB + attack-patterns DB).
+   * Call this once at startup before serving requests.
+   * Idempotent — safe to call multiple times.
+   */
+  public async initialize(): Promise<void> {
+    await this.vectorScanner.initialize();
+  }
+
+  /**
    * Process a request through all 6 defence layers.
    * L1-L4 are blocking (must pass before agents see the input).
    * L5-L6 fire asynchronously after the verdict is determined.

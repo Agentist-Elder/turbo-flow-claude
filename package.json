@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "playwright test",
+    "test": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
