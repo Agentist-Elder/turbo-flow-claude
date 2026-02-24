@@ -1,7 +1,7 @@
 # CLAUDE.md — RuvBot Turbo-Flow Project Intelligence
 
 > Hand-authored ground truth. Do not overwrite with `generate-claude-md.sh`.
-> Last updated: 2026-02-22 (Phase 15 partial — coherence gate wired)
+> Last updated: 2026-02-24 (Phase 17 complete — semantic embedding upgrade)
 
 ---
 
@@ -37,14 +37,14 @@ database to produce cryptographically witnessed research documents.
 
 ```
 src/
-  main.ts                  # Entry point: firstFlight() + runGoal() GOAP pipeline
+  main.ts                  # Entry point: firstFlight() + runGoal() GOAP pipeline + fireAndAudit()
   pq-wrap.ts               # Post-quantum wrapper (ML-DSA-65 / FIPS 204)
   publish.ts               # Publishing utilities
   phase15-seed.ts          # Phase 15: seeds ruvbot-coherence.db (630 synthetic patterns)
   security/
     coordinator.ts         # AIDefence 6-layer gate orchestrator (+ coherence gate)
-    vector-scanner.ts      # HNSW attack-pattern scanner + coherence DB gate routing
-    min-cut-gate.ts        # Phase 15: λ-gated router with hysteresis (AISP ⟦Γ⟧)
+    vector-scanner.ts      # HNSW attack-pattern scanner + coherence DB gate routing + searchCoherenceDb()
+    min-cut-gate.ts        # Phase 15/17: λ-gated router, SEMANTIC_COHERENCE_THRESHOLD, SessionThreatState
     explorer.ts            # GOAP explorer agent
     adaptive-learner.ts    # Hebbian pattern learner
     live-mcp-client.ts     # Live MCP client
@@ -53,16 +53,23 @@ src/
     orchestrator.ts        # Swarm orchestrator
     reviewer-logic.ts      # Reviewer swarm logic
 
+scripts/
+  generate-red-team-data.ts  # Phase 16: 500 attack strings, 5 categories
+  seed-red-team.ts           # Phase 16/17: seeds ruvbot-coherence.db from corpus (ONNX embeddings)
+  provision-model.ts         # Phase 17: downloads + pins all-MiniLM-L6-v2 ONNX model
+
 docs/research/             # GOAP output documents (RVF-witnessed)
 .claude-flow/data/
-  ruvbot-coherence.db      # Phase 15: 630 synthetic GOAP-phase patterns (git-ignored, reproducible)
+  ruvbot-coherence.db      # Phase 17: 500 semantic ONNX vectors (git-ignored, reproducible)
+  models/                  # Xenova/all-MiniLM-L6-v2 ONNX model (git-ignored)
+  models/checksums.json    # Supply-chain SHA-256 pin (git-tracked)
 .agentic-qe/               # AQE v3 memory + config (SQLite)
 .vscode/settings.json      # rust-analyzer: excludes bunker-strategy-rs (OOM prevention)
 ```
 
 ---
 
-## Phase History (Phases 1–15 partial)
+## Phase History (Phases 1–17)
 
 | Phase | Description |
 |-------|-------------|
@@ -72,11 +79,15 @@ docs/research/             # GOAP output documents (RVF-witnessed)
 | 12b   | URL fetch phase (Node.js fetch, --fetch-urls CLI flag) |
 | 13    | DID Passport design (pseudocode only — not built) |
 | 14    | TSA attestation (DigiCert RFC 3161), Cosign/Rekor publish, ML-DSA-65 PQ re-wrap |
-| 15    | VectorDB fix, min-cut gate AISP spec, coherence DB seeded, L2→L3 gate wired (see below) |
+| 15    | VectorDB fix, min-cut gate AISP spec, coherence DB seeded, L2→L3 gate wired |
+| 16    | Red-team corpus (500 strings), seed-red-team.ts, COHERENCE_GATE observability |
+| 17    | Semantic embedding upgrade (all-MiniLM-L6-v2), SEMANTIC_COHERENCE_THRESHOLD=2.0, SessionThreatState, async auditor |
 
-**Phase 15 status**: Coherence gate is live and changes security outcomes. The fictional
-`@ruvector/mincut-wasm` dependency has been replaced with an L2 kNN density approach using
-the seeded `ruvbot-coherence.db`. The `runGate()` stub remains for future exact λ computation.
+**Phase 17 status**: `ruvbot-coherence.db` re-seeded with true 384-dim ONNX embeddings.
+Async auditor fires concurrently after fast-path clearance; circuit breaker awaited at phase
+boundary before PAL. λ calibration confirmed: attacks 2.1–4.5, clean 1.2, threshold 2.0.
+MinCut_Gate activation deferred (fast-path still uses char-code textToVector — 50× λ gap).
+269/269 tests passing.
 
 ---
 
@@ -144,6 +155,16 @@ work, not just test-generation agents.
 **AQE Swarm Discipline**: After calling `task_orchestrate`, do not poll `task_status` in a
 loop. If the task does not complete within two status checks, fall back to `security_scan_comprehensive`
 and manual adversarial review rather than blocking on a hung swarm.
+
+**Verification Protocol Exception** — AQE Known Limitation (FYI only):
+The swarm currently cannot resolve TypeScript source paths in the local environment, leading
+to routing errors (57ms failure on `task_orchestrate`; "no source files found" on
+`security_scan_comprehensive`). Validated fallback in lieu of AQE SARIF reports:
+- **Live Integration Traces**: Phase boundary circuit breaker confirmed via `runGoal()` end-to-end
+  (attack goal blocked at L3; clean goal passed Phase 1 → auditor fired → PAL reached)
+- **λ Threshold Testing**: Manual + automated adversarial injection confirming attack λ ≥ 2.0,
+  clean λ < 2.0 (269 passing tests including ONNX integration suite)
+- **Comprehensive Security Scans**: Manual adversarial trace + `qe-security-auditor` review
 
 ### Test Execution (when tests must run)
 - NEVER `npm test` without `--run` flag (watch mode hangs CI)
@@ -262,10 +283,11 @@ Phase 6: Summary
 
 ---
 
-## Phase 15 Remaining Work (Next Session)
+## Phase 18 Remaining Work (Next Session)
 
-- [ ] Populate `attack-patterns.db` with real attack embeddings from red-team sessions
-- [ ] Replace synthetic coherence patterns with real GOAP-phase attack morphologies
+- [ ] Replace fast-path `textToVector` (char-code) with semantic embeddings so MinCut_Gate
+      can activate (current 50× λ gap: proxy ≈1.3–1.8 vs polylogThreshold(500) ≈ 88)
+- [ ] Recalibrate `polylogThreshold` alongside semantic fast-path embedding
+- [ ] Populate `attack-patterns.db` (L2 scanner) with real attack embeddings
+- [ ] Replace `runGate()` stub if `@ruvector/mincut-wasm` ships to npm (Stoer-Wagner exact λ)
 - [ ] Wire `MinCutGate.lastGate` into coordinator L2 verdict details for observability
-- [ ] Replace `runGate()` stub if exact min-cut computation becomes available
-- [ ] Delegate all verification to AQE swarm with `qe-devils-advocate` + `qe-security-auditor`
