@@ -10,6 +10,7 @@
   "dependencies": {
     "@claude-flow/plugin-agentic-qe": "^3.0.0-alpha.4",
     "@google/generative-ai": "^0.24.1",
+    "@huggingface/transformers": "3.8.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@noble/hashes": "^2.0.1",
     "@noble/post-quantum": "^0.5.4",

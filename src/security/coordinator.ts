@@ -223,6 +223,19 @@ export class AIDefenceCoordinator {
   }
 
   /**
+   * Zero-Trust Data Boundary: sanitize externally-sourced content before it
+   * reaches the LLM. A valid signed request authorizes the sender, NOT the
+   * payload. Every piece of external content — fetched URLs, uploaded files,
+   * email bodies — must pass the same vector gate as direct user input.
+   *
+   * Delegates to processRequest(). The separate method makes the architectural
+   * intent explicit at the call site: trusted identity ≠ payload safety.
+   */
+  public async sanitizeExternalContent(content: string): Promise<DefenceResult> {
+    return this.processRequest(content);
+  }
+
+  /**
    * Process a request through all 6 defence layers.
    * L1-L4 are blocking (must pass before agents see the input).
    * L5-L6 fire asynchronously after the verdict is determined.

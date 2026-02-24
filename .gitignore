@@ -31,5 +31,10 @@ node_modules/
 ruvector.db
 *.db.bak
 
+# Phase 17: ONNX model binaries (~80 MB — too large for git)
+# checksums.json is intentionally NOT ignored — it pins the supply chain
+.claude-flow/data/models/**
+!.claude-flow/data/models/checksums.json
+
 # Agentic QE runtime memory (SQLite + config generated at runtime)
 .agentic-qe/

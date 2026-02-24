@@ -113,6 +113,7 @@ export async function firstFlight(): Promise<FlightLog> {
   await scanner.initialize();
   const liveClient = new NeuralLiveMCPClient(adapter.callTool.bind(adapter), scanner);
   const coordinator = new AIDefenceCoordinator({}, liveClient);
+  await coordinator.initialize();
   const bridge = new RecordingMCPBridge();
   const orchestrator = new SwarmOrchestrator(coordinator, {}, bridge);
 
@@ -290,6 +291,7 @@ export async function firstFlightLive(): Promise<FlightLog> {
   // 2. Wire Live MCP Client (L2 uses VectorScanner, rest use MCP tools)
   const liveClient = new NeuralLiveMCPClient(callTool, scanner);
   const coordinator = new AIDefenceCoordinator({}, liveClient);
+  await coordinator.initialize();
   const bridge = new RecordingMCPBridge();
   const orchestrator = new SwarmOrchestrator(coordinator, {}, bridge);
 
@@ -774,6 +776,7 @@ export async function runGoal(
   await scanner.initialize();
   const liveClient = new NeuralLiveMCPClient(cfAdapter.callTool.bind(cfAdapter), scanner);
   const coordinator = new AIDefenceCoordinator({}, liveClient);
+  await coordinator.initialize();
   const mcpBridge = new RecordingMCPBridge();
   const orchestrator = new SwarmOrchestrator(coordinator, {}, mcpBridge, rvfBridge);
 
@@ -837,6 +840,32 @@ export async function runGoal(
     const sources = await fetchUrlsToFiles(opts.fetchUrls);
     fetchedSources.push(...sources);
     console.log(`[GOAP] Fetch complete: ${fetchedSources.length}/${opts.fetchUrls.length} sources ready for PAL`);
+
+    // ── Zero-Trust Data Boundary ──────────────────────────────────────
+    // Every fetched source is scanned through the vector gate before PAL
+    // sees it. A valid signed request authorizes the sender, not the payload.
+    // Blocked sources are removed from context and their temp files deleted.
+    if (fetchedSources.length > 0) {
+      const ztSafe: FetchedSource[] = [];
+      for (const source of fetchedSources) {
+        const content = await readFile(source.filePath, 'utf-8');
+        const verdict = await coordinator.sanitizeExternalContent(content);
+        if (verdict.is_blocked || verdict.verdict !== ThreatLevel.SAFE) {
+          // Strict external-content policy: FLAGGED and BLOCKED are both excluded.
+          // A PDF cannot clarify its intent — if flagged, it is treated as poisoned.
+          const reason = verdict.is_blocked
+            ? verdict.block_reason
+            : `${verdict.verdict} — strict external-content policy`;
+          console.warn(`[GOAP][ZT] ${source.url} excluded (${reason}) — removed from PAL context`);
+          await unlink(source.filePath).catch(() => {});
+        } else {
+          ztSafe.push(source);
+        }
+      }
+      fetchedSources.length = 0;
+      fetchedSources.push(...ztSafe);
+      console.log(`[GOAP][ZT] Zero-trust cleared: ${ztSafe.length}/${sources.length} sources passed gate`);
+    }
 
     if (fetchedSources.length > 0) {
       // Build manifest string and hash it — this is what the TSA timestamps
