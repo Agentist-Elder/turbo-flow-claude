@@ -1,25 +1,27 @@
 /**
- * Phase 16 — Red-Team Coherence Gate Integration Test
+ * Phase 16/18 — Red-Team Coherence Gate Integration Test
  *
  * Verifies the observable behaviour of the coherence gate against the seeded
- * red-team corpus (500 real attack strings in ruvbot-coherence.db).
+ * red-team corpus (509 attack strings in ruvbot-coherence.db).
  *
  * Tests what IS true, not what is aspirational:
  *
  *   1. COHERENCE_GATE entry is always present in the audit trail
  *   2. λ signal correctly differentiates (avg attack λ > avg clean λ)
  *   3. Route is L3_Gate — honest acknowledgement of the current threshold gap
- *      (MinCut_Gate activation deferred to Phase 17: semantic embedding upgrade)
+ *      (MinCut_Gate activation deferred to Phase 18: fast-path semantic upgrade)
  *   4. Gate never throws or crashes
  *
  * Skips automatically if the seeded DB is absent (run seed-red-team.ts first).
  *
- * Phase 17 NOTE:
+ * Phase 18 NOTE:
  *   MinCut_Gate will not fire until polylogThreshold is recalibrated alongside
- *   the textToVector → semantic embedding upgrade. The λ gap is ~50×:
- *   observed proxy λ ≈ 1.3–1.8 vs threshold ≈ 88 for n=500.
- *   The differential signal (attack > clean) confirms the corpus is correctly
- *   seeded and the proxy formula direction is correct.
+ *   the fast-path textToVector → semantic embedding upgrade. The λ gap is ~50×:
+ *   observed proxy λ ≈ 1.3–1.8 vs polylogThreshold(509) ≈ 88.
+ *   DB now contains 509 vectors: 500 Phase 16 jailbreaks + 9 Phase 18 anchors
+ *   (lamehug_recon: 3, mcp_tool_poisoning: 3, vibe_coding_runaway: 3).
+ *   Phase 18 anchors score λ ≈ 1.35–1.71 against current corpus (below threshold).
+ *   Density expansion to 30+ variants per category needed to reach λ ≥ 2.0.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -105,7 +107,7 @@ describe.skipIf(!DB_EXISTS)(
 
     it('db_size reported in gate decision reflects seeded corpus size', async () => {
       const decision = await scanner.computeGateDecision(ATTACK_PROMPTS[0]);
-      expect(decision.db_size).toBe(500);
+      expect(decision.db_size).toBe(509); // Phase 18: 500 + 9 anchor seeds
     });
 
     // ── 2. λ values are positive and finite ───────────────────────────────────
@@ -192,7 +194,7 @@ describe.skipIf(!DB_EXISTS || !MODEL_EXISTS)(
         const out = await extractor(normalized, { pooling: 'mean', normalize: true }) as { data: Float32Array };
         const { lambda, dbSize } = await scanner.searchCoherenceDb(Array.from(out.data), 5);
         expect(lambda).toBeGreaterThan(0);
-        expect(dbSize).toBe(500);
+        expect(dbSize).toBe(509); // Phase 18: 500 + 9 anchor seeds
         console.log(`  [attack] "${prompt.slice(0, 50)}" → λ=${lambda.toFixed(2)}`);
       }
     }, 30_000);
