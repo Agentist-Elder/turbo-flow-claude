@@ -41,6 +41,25 @@ export const FAST_PATH_BUDGET_MS = 20;
  */
 export const SEMANTIC_COHERENCE_THRESHOLD = 2.0;
 
+/**
+ * Partition Ratio Score threshold.
+ *
+ * ratio = d_clean / d_attack  (average cosine distances to k=5 neighbors)
+ *
+ * Interpretation:
+ *   ratio > 1.0  → closer to known attacks than to clean reference → suspicious
+ *   ratio ≤ 1.0  → farther from attacks than from clean patterns → benign
+ *
+ * Calibrated at 1.0 (the natural crossover point). The ratio is more
+ * principled than raw λ because it normalises for corpus density differences:
+ * a dense attack cluster and a sparse attack cluster both produce meaningful
+ * signal relative to the clean reference baseline.
+ *
+ * Used by the async auditor in fireAndAudit() as the primary discriminant
+ * when the clean reference DB is available; falls back to λ otherwise.
+ */
+export const PARTITION_RATIO_THRESHOLD = 1.0;
+
 /** L3 fallback gate budget in ms (AISP: L3_Budget ≜ 5) */
 export const L3_BUDGET_MS = 5;
 

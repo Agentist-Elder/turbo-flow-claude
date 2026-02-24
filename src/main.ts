@@ -28,6 +28,7 @@ import { VectorScanner } from './security/vector-scanner.js';
 import {
   SessionThreatState,
   SEMANTIC_COHERENCE_THRESHOLD,
+  PARTITION_RATIO_THRESHOLD,
 } from './security/min-cut-gate.js';
 import {
   SwarmOrchestrator,
@@ -719,11 +720,28 @@ async function fireAndAudit(
     const normalized = scanner.normalizeInput(text);
     const out = await extractor(normalized, { pooling: 'mean', normalize: true }) as { data: Float32Array };
     const vec = Array.from(out.data);
-    const { lambda } = await scanner.searchCoherenceDb(vec, 5);
-    if (lambda >= SEMANTIC_COHERENCE_THRESHOLD) {
-      const msg = `Async semantic audit: λ=${lambda.toFixed(2)} ≥ ${SEMANTIC_COHERENCE_THRESHOLD} (semantic coherence threshold)`;
-      threatState.escalate(msg);
-      console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
+
+    // Primary discriminant: Partition Ratio Score (d_clean / d_attack)
+    // Falls back to λ threshold if clean reference DB is unavailable.
+    const ratioResult = await scanner.partitionRatioScore(vec, 5);
+
+    if (ratioResult !== null) {
+      const { ratio, d_attack, d_clean } = ratioResult;
+      if (ratio > PARTITION_RATIO_THRESHOLD) {
+        const msg =
+          `Async semantic audit: ratio=${ratio.toFixed(3)} > ${PARTITION_RATIO_THRESHOLD} ` +
+          `(d_clean=${d_clean.toFixed(3)}, d_attack=${d_attack.toFixed(3)}) — closer to attack space`;
+        threatState.escalate(msg);
+        console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
+      }
+    } else {
+      // Fallback: clean reference DB not yet seeded — use raw λ
+      const { lambda } = await scanner.searchCoherenceDb(vec, 5);
+      if (lambda >= SEMANTIC_COHERENCE_THRESHOLD) {
+        const msg = `Async semantic audit: λ=${lambda.toFixed(2)} ≥ ${SEMANTIC_COHERENCE_THRESHOLD} (semantic coherence threshold, partition ratio unavailable)`;
+        threatState.escalate(msg);
+        console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
+      }
     }
   } catch (err) {
     console.warn('[AsyncAuditor] Error during semantic audit (fail-open):', err);

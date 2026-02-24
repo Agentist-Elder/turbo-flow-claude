@@ -15,6 +15,14 @@ import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { DB_CONFIG, MinCutGate, type GateDecision, estimateLambda } from './min-cut-gate.js';
 
+export interface PartitionRatioResult {
+  ratio: number;          // d_clean / d_attack — ratio > 1.0 → closer to attacks
+  d_attack: number;       // avg cosine distance to k-nearest attack neighbors
+  d_clean: number;        // avg cosine distance to k-nearest clean neighbors
+  dbSizeAttack: number;
+  dbSizeClean: number;
+}
+
 const _require = createRequire(import.meta.url);
 const { VectorDB } = _require('ruvector');
 
@@ -31,6 +39,8 @@ export interface VectorScannerConfig {
   dbPath: string;
   /** Path to the seeded coherence DB for gate routing (ruvbot-coherence.db). */
   coherenceDbPath?: string;
+  /** Path to the clean reference DB for Partition Ratio Score (ruvbot-clean-reference.db). */
+  cleanReferenceDbPath?: string;
   dimensions: number;
   attackThreshold: number;
   suspiciousThreshold: number;
@@ -44,6 +54,7 @@ export interface ScanResultWithGate extends AnalysisResult {
 export const DEFAULT_SCANNER_CONFIG: VectorScannerConfig = {
   dbPath: '.claude-flow/data/attack-patterns.db',
   coherenceDbPath: '.claude-flow/data/ruvbot-coherence.db',
+  cleanReferenceDbPath: '.claude-flow/data/ruvbot-clean-reference.db',
   dimensions: 384,
   attackThreshold: 0.3,
   suspiciousThreshold: 0.5,
@@ -195,6 +206,7 @@ export class VectorScanner {
   private config: VectorScannerConfig;
   private db: InstanceType<typeof VectorDB> | null = null;
   private coherenceDb: InstanceType<typeof VectorDB> | null = null;
+  private cleanDb: InstanceType<typeof VectorDB> | null = null;
   private initialized = false;
   private patternRegistry: PatternEntry[] = [];
   private minCutGate = new MinCutGate();
@@ -246,6 +258,27 @@ export class VectorScanner {
         });
       } catch (err) {
         console.warn('[VectorScanner] Coherence DB unavailable (gate will default to L3):', err);
+      }
+    }
+
+    // Open clean reference DB for Partition Ratio Score.
+    // Fails gracefully — partitionRatioScore() returns null if unavailable.
+    if (this.config.cleanReferenceDbPath) {
+      try {
+        mkdirSync(dirname(this.config.cleanReferenceDbPath), { recursive: true });
+        this.cleanDb = new VectorDB({
+          storagePath: this.config.cleanReferenceDbPath,
+          dimensions: this.config.dimensions,
+          distanceMetric: 'Cosine',
+          hnswConfig: {
+            m: DB_CONFIG.m,
+            efConstruction: DB_CONFIG.efConstruction,
+            efSearch: DB_CONFIG.efSearch,
+            maxElements: DB_CONFIG.maxElements,
+          },
+        });
+      } catch (err) {
+        console.warn('[VectorScanner] Clean reference DB unavailable (partitionRatioScore will return null):', err);
       }
     }
 
@@ -461,6 +494,58 @@ export class VectorScanner {
     } catch (err) {
       console.warn('[VectorScanner] searchCoherenceDb failed (fail-open):', err);
       return { lambda: 0, dbSize: 0 };
+    }
+  }
+
+  /**
+   * Compute the Partition Ratio Score for a pre-computed ONNX embedding.
+   *
+   * ratio = d_clean / d_attack
+   *
+   * Where d_attack = avg cosine distance to k nearest neighbors in the
+   * attack coherence DB (ruvbot-coherence.db) and d_clean = avg cosine
+   * distance to k nearest neighbors in the clean reference DB
+   * (ruvbot-clean-reference.db, seeded with 50 benign prompts).
+   *
+   * ratio > PARTITION_RATIO_THRESHOLD (1.0) → closer to attack space
+   * ratio ≤ PARTITION_RATIO_THRESHOLD (1.0) → closer to clean space
+   *
+   * Returns null if either DB is unavailable (caller should fall back to λ).
+   * Never throws to the caller.
+   */
+  async partitionRatioScore(vector: number[], k: number): Promise<PartitionRatioResult | null> {
+    if (!this.initialized) await this.initialize();
+    if (!this.coherenceDb || !this.cleanDb) return null;
+
+    try {
+      const [attackResults, cleanResults, attackSize, cleanSize] = await Promise.all([
+        this.coherenceDb.search({ vector, k }),
+        this.cleanDb.search({ vector, k }),
+        this.coherenceDb.len(),
+        this.cleanDb.len(),
+      ]);
+
+      const attackDists: number[] = attackResults.map((r: SearchResult) => r.score);
+      const cleanDists: number[]  = cleanResults.map((r: SearchResult) => r.score);
+
+      if (attackDists.length === 0 || cleanDists.length === 0) return null;
+
+      const d_attack = attackDists.reduce((a, b) => a + b, 0) / attackDists.length;
+      const d_clean  = cleanDists.reduce((a, b) => a + b, 0) / cleanDists.length;
+
+      // Avoid division by zero: if attack DB is empty / returns zero distances
+      if (d_attack < 1e-9) return null;
+
+      return {
+        ratio: d_clean / d_attack,
+        d_attack,
+        d_clean,
+        dbSizeAttack: attackSize,
+        dbSizeClean: cleanSize,
+      };
+    } catch (err) {
+      console.warn('[VectorScanner] partitionRatioScore failed (fail-open):', err);
+      return null;
     }
   }
 

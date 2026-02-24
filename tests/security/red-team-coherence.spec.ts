@@ -17,11 +17,13 @@
  * Phase 18 NOTE:
  *   MinCut_Gate will not fire until polylogThreshold is recalibrated alongside
  *   the fast-path textToVector → semantic embedding upgrade. The λ gap is ~50×:
- *   observed proxy λ ≈ 1.3–1.8 vs polylogThreshold(509) ≈ 88.
- *   DB now contains 509 vectors: 500 Phase 16 jailbreaks + 9 Phase 18 anchors
- *   (lamehug_recon: 3, mcp_tool_poisoning: 3, vibe_coding_runaway: 3).
- *   Phase 18 anchors score λ ≈ 1.35–1.71 against current corpus (below threshold).
- *   Density expansion to 30+ variants per category needed to reach λ ≥ 2.0.
+ *   observed proxy λ ≈ 1.3–1.8 vs polylogThreshold(809) ≈ 97.
+ *   DB now contains 809 vectors: 500 Phase 16 jailbreaks + 9 Phase 18 anchors
+ *   + 270 Phase 18 density variants (lamehug/mcp/vibe, 90 each)
+ *   + 30 Phase 18 bridge variants (diagnostic_exfil: combines performance framing
+ *     + external callback exfil — targets the 0.21 λ gap in G's fresh probe).
+ *   Partition Ratio Score (d_clean/d_attack) implemented as primary discriminant
+ *   in fireAndAudit(); falls back to λ when clean reference DB is absent.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -107,7 +109,7 @@ describe.skipIf(!DB_EXISTS)(
 
     it('db_size reported in gate decision reflects seeded corpus size', async () => {
       const decision = await scanner.computeGateDecision(ATTACK_PROMPTS[0]);
-      expect(decision.db_size).toBe(509); // Phase 18: 500 + 9 anchor seeds
+      expect(decision.db_size).toBe(809); // Phase 18: 779 + 30 diagnostic_exfil bridge variants
     });
 
     // ── 2. λ values are positive and finite ───────────────────────────────────
@@ -194,7 +196,7 @@ describe.skipIf(!DB_EXISTS || !MODEL_EXISTS)(
         const out = await extractor(normalized, { pooling: 'mean', normalize: true }) as { data: Float32Array };
         const { lambda, dbSize } = await scanner.searchCoherenceDb(Array.from(out.data), 5);
         expect(lambda).toBeGreaterThan(0);
-        expect(dbSize).toBe(509); // Phase 18: 500 + 9 anchor seeds
+        expect(dbSize).toBe(809); // Phase 18: 779 + 30 diagnostic_exfil bridge variants
         console.log(`  [attack] "${prompt.slice(0, 50)}" → λ=${lambda.toFixed(2)}`);
       }
     }, 30_000);
