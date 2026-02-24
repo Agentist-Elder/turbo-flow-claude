@@ -26,6 +26,10 @@ import { NeuralLiveMCPClient, type MCPToolCaller } from './security/live-mcp-cli
 import { MCPTransportAdapter, createClaudeFlowTransport } from './security/mcp-transport.js';
 import { VectorScanner } from './security/vector-scanner.js';
 import {
+  SessionThreatState,
+  SEMANTIC_COHERENCE_THRESHOLD,
+} from './security/min-cut-gate.js';
+import {
   SwarmOrchestrator,
   SecurityViolationError,
   WitnessType,
@@ -683,6 +687,49 @@ async function fetchUrlsToFiles(urls: string[]): Promise<FetchedSource[]> {
   return sources;
 }
 
+// ── Async Semantic Auditor ───────────────────────────────────────────
+
+/**
+ * Fires a background semantic audit after the fast-path gate clears a payload.
+ *
+ * The fast-path (coordinator.processRequest / sanitizeExternalContent) runs in ≤5ms
+ * using char-code embeddings. This auditor runs concurrently, using the locally
+ * provisioned all-MiniLM-L6-v2 ONNX model (~30-100ms warm) to produce a true
+ * semantic embedding, then queries ruvbot-coherence.db for kNN proximity to
+ * known attack patterns.
+ *
+ * If λ ≥ SEMANTIC_COHERENCE_THRESHOLD (2.0), the session threat state is
+ * escalated and the pipeline aborts before PAL receives any data.
+ *
+ * Fails open: any error in the auditor is logged but does not block the pipeline.
+ * The fast-path gate remains the primary safety control.
+ *
+ * @param text         Raw text to audit (before normalizeInput)
+ * @param extractor    Pre-loaded @huggingface/transformers feature-extraction pipeline
+ * @param scanner      VectorScanner with ruvbot-coherence.db open
+ * @param threatState  Shared mutable flag — escalate() if λ ≥ threshold
+ */
+async function fireAndAudit(
+  text: string,
+  extractor: Awaited<ReturnType<typeof import('@huggingface/transformers').pipeline>>,
+  scanner: VectorScanner,
+  threatState: SessionThreatState,
+): Promise<void> {
+  try {
+    const normalized = scanner.normalizeInput(text);
+    const out = await extractor(normalized, { pooling: 'mean', normalize: true }) as { data: Float32Array };
+    const vec = Array.from(out.data);
+    const { lambda } = await scanner.searchCoherenceDb(vec, 5);
+    if (lambda >= SEMANTIC_COHERENCE_THRESHOLD) {
+      const msg = `Async semantic audit: λ=${lambda.toFixed(2)} ≥ ${SEMANTIC_COHERENCE_THRESHOLD} (semantic coherence threshold)`;
+      threatState.escalate(msg);
+      console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
+    }
+  } catch (err) {
+    console.warn('[AsyncAuditor] Error during semantic audit (fail-open):', err);
+  }
+}
+
 // ── Goal Runner (Phase 12a — Option B: Self-Contained) ──────────────
 
 /**
@@ -747,6 +794,22 @@ export async function runGoal(
 
   console.log(`\n[GOAP] === CONNECTING TRANSPORTS ===`);
 
+  // ── 0a. Load async auditor (ONNX — supply-chain pinned) ────────────
+
+  const threatState = new SessionThreatState();
+  let extractor: Awaited<ReturnType<typeof import('@huggingface/transformers').pipeline>> | null = null;
+
+  try {
+    const { pipeline: hfPipeline, env: hfEnv } = await import('@huggingface/transformers');
+    const modelDir = join(process.cwd(), '.claude-flow', 'data', 'models');
+    hfEnv.cacheDir = modelDir;
+    hfEnv.allowRemoteModels = false;
+    extractor = await hfPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device: 'cpu' });
+    console.log(`[GOAP] Async auditor ready (all-MiniLM-L6-v2, supply-chain pinned)`);
+  } catch (err) {
+    console.warn(`[GOAP] Async auditor unavailable (fail-open — fast-path gate remains active): ${err}`);
+  }
+
   const cfAdapter = await createClaudeFlowTransport();
   console.log(`[GOAP] claude-flow (Dispatcher) connected`);
 
@@ -795,6 +858,10 @@ export async function runGoal(
     { taskId: `GOAP-${Date.now()}`, priority: 'high', type: 'research-goal' },
   );
 
+  // Collect async audit promises fired after each fast-path clearance.
+  // All are awaited before PAL receives any data (phase boundary check).
+  const auditPromises: Promise<void>[] = [];
+
   let sanitizedGoal: string;
   try {
     log.totalDispatches++;
@@ -805,6 +872,12 @@ export async function runGoal(
     console.log(`[GOAP] PASSED — Verdict: ${record.defenceResult.verdict}`);
     console.log(`  Content hash: ${record.contentHash}`);
     console.log(`  Latency:      ${record.defenceResult.total_latency_ms.toFixed(2)}ms`);
+
+    // Fire async auditor immediately — runs concurrently while we fetch URLs / prep context.
+    if (extractor) {
+      auditPromises.push(fireAndAudit(goal, extractor, scanner, threatState));
+      console.log(`[GOAP] Async auditor fired for goal (ONNX semantic check running in background)`);
+    }
   } catch (err) {
     if (err instanceof SecurityViolationError) {
       log.totalBlocked++;
@@ -860,6 +933,10 @@ export async function runGoal(
           await unlink(source.filePath).catch(() => {});
         } else {
           ztSafe.push(source);
+          // Fire async auditor on each ZT-cleared source (semantic check before PAL context)
+          if (extractor) {
+            auditPromises.push(fireAndAudit(content, extractor, scanner, threatState));
+          }
         }
       }
       fetchedSources.length = 0;
@@ -917,6 +994,27 @@ export async function runGoal(
         '---',
       ].join('\n')
     : '';
+
+  // ── 3c. Phase boundary: await all async auditors before PAL ─────────
+  // The fast-path gate cleared the payload in ≤5ms. The ONNX semantic auditor
+  // ran concurrently (~30-100ms). We block here to ensure the semantic verdict
+  // is available before any data reaches PAL.
+
+  if (auditPromises.length > 0) {
+    console.log(`\n[GOAP] === PHASE BOUNDARY: AWAITING SEMANTIC AUDIT (${auditPromises.length} check(s)) ===`);
+    await Promise.all(auditPromises);
+    if (threatState.escalated) {
+      console.error(`[GOAP] ABORT — Semantic auditor escalated: ${threatState.reason}`);
+      console.error(`[GOAP] Pipeline terminated before PAL received any data.`);
+      await orchestrator.shutdown();
+      await cfAdapter.disconnect();
+      await rvfAdapter.disconnect();
+      await palAdapter.disconnect();
+      log.elapsedMs = performance.now() - t0;
+      return log;
+    }
+    console.log(`[GOAP] Semantic audit PASSED — pipeline continuing to PAL`);
+  }
 
   // ── 4. PAL Chat: research with file-based context ───────────────────
 

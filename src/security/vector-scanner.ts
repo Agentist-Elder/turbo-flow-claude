@@ -442,6 +442,29 @@ export class VectorScanner {
   }
 
   /**
+   * Search the coherence DB with a pre-computed semantic embedding and return
+   * the raw λ density proxy + DB size. Used by the async auditor in runGoal()
+   * which supplies a true ONNX embedding instead of the fast-path char-code proxy.
+   *
+   * Fails safe: returns λ=0 if the coherence DB is unavailable or search throws.
+   */
+  async searchCoherenceDb(vector: number[], k: number): Promise<{ lambda: number; dbSize: number }> {
+    if (!this.initialized) await this.initialize();
+    if (!this.coherenceDb) return { lambda: 0, dbSize: 0 };
+
+    try {
+      const results = await this.coherenceDb.search({ vector, k });
+      const dists = results.map((r: SearchResult) => r.score);
+      const dbSize = await this.coherenceDb.len();
+      const lambda = estimateLambda(dists);
+      return { lambda, dbSize };
+    } catch (err) {
+      console.warn('[VectorScanner] searchCoherenceDb failed (fail-open):', err);
+      return { lambda: 0, dbSize: 0 };
+    }
+  }
+
+  /**
    * Compute the MinCutGate routing decision for an input by searching
    * the coherence DB (ruvbot-coherence.db, seeded with 630 synthetic patterns).
    *

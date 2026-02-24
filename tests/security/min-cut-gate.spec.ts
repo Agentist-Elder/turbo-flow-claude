@@ -16,12 +16,68 @@ import {
   DB_CONFIG,
   FAST_PATH_BUDGET_MS,
   L3_BUDGET_MS,
+  SEMANTIC_COHERENCE_THRESHOLD,
   polylogThreshold,
   estimateLambda,
   MinCutGate,
+  SessionThreatState,
   runGate,
   type GateDecision,
 } from '../../src/security/min-cut-gate.js';
+
+// ── SEMANTIC_COHERENCE_THRESHOLD calibration ─────────────────────────
+
+describe('SEMANTIC_COHERENCE_THRESHOLD', () => {
+  it('is calibrated to 2.0 (bisects semantic λ range: clean ≈1.2, attack ≈2.1–4.5)', () => {
+    expect(SEMANTIC_COHERENCE_THRESHOLD).toBe(2.0);
+  });
+
+  it('is strictly greater than 1 (never fires on cold start λ=0)', () => {
+    expect(SEMANTIC_COHERENCE_THRESHOLD).toBeGreaterThan(1);
+  });
+});
+
+// ── SessionThreatState ────────────────────────────────────────────────
+
+describe('SessionThreatState', () => {
+  it('starts with escalated=false and reason=null', () => {
+    const s = new SessionThreatState();
+    expect(s.escalated).toBe(false);
+    expect(s.reason).toBeNull();
+  });
+
+  it('escalate() sets escalated=true and records the reason', () => {
+    const s = new SessionThreatState();
+    s.escalate('test reason');
+    expect(s.escalated).toBe(true);
+    expect(s.reason).toBe('test reason');
+  });
+
+  it('first escalation wins — subsequent calls do not overwrite reason', () => {
+    const s = new SessionThreatState();
+    s.escalate('first');
+    s.escalate('second');
+    expect(s.reason).toBe('first');
+    expect(s.escalated).toBe(true);
+  });
+
+  it('each instance is independent — escalating one does not affect another', () => {
+    const a = new SessionThreatState();
+    const b = new SessionThreatState();
+    a.escalate('threat');
+    expect(a.escalated).toBe(true);
+    expect(b.escalated).toBe(false);
+  });
+
+  it('escalated flag can be read repeatedly without side effects', () => {
+    const s = new SessionThreatState();
+    expect(s.escalated).toBe(false);
+    expect(s.escalated).toBe(false);
+    s.escalate('x');
+    expect(s.escalated).toBe(true);
+    expect(s.escalated).toBe(true);
+  });
+});
 
 // ── (a) AISP constant contract ───────────────────────────────────────
 

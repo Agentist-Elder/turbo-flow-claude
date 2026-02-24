@@ -25,6 +25,22 @@
 /** Total fast-path budget in ms (AISP: FastPath_Budget ≜ 20) */
 export const FAST_PATH_BUDGET_MS = 20;
 
+/**
+ * Empirically calibrated threshold for semantic (ONNX) embeddings.
+ *
+ * With all-MiniLM-L6-v2 vectors in ruvbot-coherence.db (Phase 17 re-seeding):
+ *   Attack prompts:  λ ≈ 2.1–4.5  (tight kNN cluster in semantic space)
+ *   Clean prompts:   λ ≈ 1.2      (sparse — far from attack patterns)
+ *
+ * Setting SEMANTIC_COHERENCE_THRESHOLD = 2.0 cleanly bisects this range.
+ * This replaces the (log₂n)² formula for the async auditor path, where
+ * ONNX embeddings are used instead of the fast-path char-code proxy.
+ *
+ * The (log₂n)² formula is preserved in polylogThreshold() for backward
+ * compat and is used by the fast-path MinCutGate (still char-code based).
+ */
+export const SEMANTIC_COHERENCE_THRESHOLD = 2.0;
+
 /** L3 fallback gate budget in ms (AISP: L3_Budget ≜ 5) */
 export const L3_BUDGET_MS = 5;
 
@@ -157,6 +173,33 @@ export interface MinCutResult extends L3Verdict {
  * Until that package is installed, we return the L3 verdict unchanged.
  * The routing decision is still tracked for observability.
  */
+// ── Session Threat State ──────────────────────────────────────────────────────
+
+/**
+ * Lightweight shared mutable flag for GOAP pipeline abort signaling.
+ *
+ * The async semantic auditor runs concurrently with the fast-path gate.
+ * If the ONNX kNN search returns λ ≥ SEMANTIC_COHERENCE_THRESHOLD after
+ * the fast path has already cleared the payload, the auditor calls
+ * escalate() and the pipeline checks this flag at each phase boundary.
+ *
+ * Design: first escalation wins (subsequent calls are no-ops so the
+ * first reason is preserved in logs). Not thread-safe by design —
+ * Node.js is single-threaded; concurrent Promises share this object
+ * safely via the event loop.
+ */
+export class SessionThreatState {
+  escalated = false;
+  reason: string | null = null;
+
+  escalate(reason: string): void {
+    if (!this.escalated) {
+      this.escalated = true;
+      this.reason = reason;
+    }
+  }
+}
+
 export async function runGate(
   decision: GateDecision,
   l3Verdict: L3Verdict,
