@@ -1,7 +1,7 @@
 # CLAUDE.md — RuvBot Turbo-Flow Project Intelligence
 
 > Hand-authored ground truth. Do not overwrite with `generate-claude-md.sh`.
-> Last updated: 2026-02-24 (Phase 17 complete — semantic embedding upgrade)
+> Last updated: 2026-02-24 (Phase 18 COMPLETE — partition ratio score + architectural split)
 
 ---
 
@@ -283,11 +283,52 @@ Phase 6: Summary
 
 ---
 
-## Phase 18 Remaining Work (Next Session)
+## Phase 18 — COMPLETE (2026-02-24)
 
-- [ ] Replace fast-path `textToVector` (char-code) with semantic embeddings so MinCut_Gate
-      can activate (current 50× λ gap: proxy ≈1.3–1.8 vs polylogThreshold(500) ≈ 88)
-- [ ] Recalibrate `polylogThreshold` alongside semantic fast-path embedding
+### What Was Built
+
+**Step 1 — Anchor Seeding**: 9 seeds (IDs 501–509): `lamehug_recon` (3), `mcp_tool_poisoning` (3),
+`vibe_coding_runaway` (3). Baseline λ = 1.35–1.71 (below threshold — threat islands confirmed).
+
+**Step 2 — Density Expansion**: 270 variants (30/seed × 9 seeds, G's pivot rules).
+Corpus: 779 vectors. G's fresh probe: λ=1.79 (gap 0.21 remaining).
+
+**Step 3 — Bridge Variants + Partition Ratio Score**:
+- 30 bridge variants (IDs 780–809, `diagnostic_exfil`): diagnostic/latency framing + exfil callback.
+  G's fresh probe post-bridge: **λ 1.79 → 2.60 ✓, ratio 2.21 ✓**
+- `scripts/data/red-team-clean-reference.json` — 50 clean reference prompts (10 categories)
+- `scripts/seed-clean-reference.ts` — seeds `ruvbot-clean-reference.db` (ONNX, 50 vectors)
+- `PARTITION_RATIO_THRESHOLD = 1.0` in `min-cut-gate.ts`
+- `partitionRatioScore(vector, k)` in `vector-scanner.ts`:
+  `ratio = d_clean / d_attack` — ratio > 1.0 → attack space
+- `fireAndAudit()` in `main.ts`: partition ratio is primary discriminant; λ is fallback
+  when clean reference DB is absent
+
+**Step 4 — Architectural Honesty (this session)**:
+- Removed dead `l2Score += 0.05` branch from `coordinator.ts` (MinCut_Gate never fires;
+  polylogThreshold(809)≈97 >> char-code λ≈1.3–1.8; embedding spaces incompatible)
+- `COHERENCE_GATE` entry remains as telemetry infrastructure (route/λ/threshold/db_size audit)
+- Architectural split is now explicit in code and docs
+
+### Architectural Split (Permanent)
+
+```
+fast-path (sync, <20ms):  L1 → L2 → COHERENCE_GATE (telemetry only) → L3 → L4
+async auditor (off-path): partitionRatioScore(ONNX) → SessionThreatState.escalate()
+```
+
+The fast-path gate records the `L3_Gate` decision in every request audit trail but does
+NOT modify `l2Score`. Semantic threat detection lives entirely in the async auditor.
+
+**Known dependency block**: `@ruvector/mincut-wasm` is not published to npm (404 confirmed).
+`runGate()` stub remains honest. When the package ships:
+1. Replace stub with `WasmMinCut.fromEdges(graphEdges).minCutValue()`
+2. Recalibrate `polylogThreshold` to the semantic λ space (threshold ≈ 2.0, not 97)
+3. The `l2Score` modifier can then be re-enabled with the correct threshold
+
+### Phase 19 / Middleware Backlog
+
+- [ ] Dynamic Clean-Traffic Capture: grow `ruvbot-clean-reference.db` from real production
+      traffic to improve partition ratio robustness (currently 50 curated prompts)
 - [ ] Populate `attack-patterns.db` (L2 scanner) with real attack embeddings
-- [ ] Replace `runGate()` stub if `@ruvector/mincut-wasm` ships to npm (Stoer-Wagner exact λ)
-- [ ] Wire `MinCutGate.lastGate` into coordinator L2 verdict details for observability
+- [ ] Replace `runGate()` stub when `@ruvector/mincut-wasm` ships to npm

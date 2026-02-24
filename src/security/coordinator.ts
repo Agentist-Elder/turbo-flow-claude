@@ -279,27 +279,32 @@ export class AIDefenceCoordinator {
       this.failOpen('L2_ANALYZE', err, verdicts, timings, t2);
     }
 
-    // ── Coherence Gate (between L2 and L3) ───────────────────────
-    // Searches ruvbot-coherence.db with the input embedding and uses the
-    // kNN density (λ proxy) to modulate l2Score before the L3 threshold check.
+    // ── Coherence Gate (between L2 and L3) — TELEMETRY ONLY ─────────────
     //
-    // Conservative design:
-    //   - MinCut_Gate route (high density): l2Score += 0.05, capped at 1.0
-    //   - L3_Gate route (sparse / cold-start): no change
-    //   - Any failure: fail-open (no-op), never blocks on gate error
+    // Phase 18 architectural decision: this gate is observability infrastructure
+    // only. It does NOT modify l2Score and cannot block requests independently.
     //
-    // The ±0.05 modifier pushes borderline inputs (e.g. l2Score=0.85) over
-    // the 0.90 block threshold when the input lands in a dense pattern cluster.
-    // It cannot create false positives on clean inputs: l2Score must already
-    // be near the threshold for the boost to matter.
+    // WHY l2Score is not modified:
+    //   ruvbot-coherence.db is seeded with ONNX semantic embeddings (Phase 17),
+    //   but computeGateDecision() queries it with char-code textToVector(). These
+    //   embedding spaces are incompatible — kNN distances are noise, not signal.
+    //   polylogThreshold(809) ≈ 97 >> observed char-code λ (1.3–1.8), so
+    //   MinCut_Gate never fires. The former l2Score += 0.05 branch was
+    //   mathematically unreachable and has been removed (Phase 18 Step 4).
+    //
+    // WHERE semantic defence lives:
+    //   The Partition Ratio Score in fireAndAudit() (async auditor, src/main.ts)
+    //   is the primary semantic gate. ratio = d_clean/d_attack > 1.0 → escalate.
+    //   It runs concurrently and fires before PAL receives any data.
+    //
+    // WHEN this gate will become active:
+    //   When @ruvector/mincut-wasm ships to npm AND the fast-path embedding
+    //   space is recalibrated alongside a semantic fast-path upgrade.
     const tGate = performance.now();
-    const l2ScoreBefore = l2Score;
     let gateDecision: GateDecision | null = null;
     try {
       gateDecision = await this.vectorScanner.computeGateDecision(currentInput);
-      if (gateDecision.route === 'MinCut_Gate') {
-        l2Score = Math.min(1.0, l2Score + 0.05);
-      }
+      // No l2Score modification — MinCut_Gate cannot fire (see comment above).
     } catch (err) {
       console.warn('[AIDefence] Coherence gate error (fail-open, no-op):', err);
     }
@@ -319,7 +324,7 @@ export class AIDefenceCoordinator {
             threshold: gateDecision.threshold,
             db_size: gateDecision.db_size,
             reason: gateDecision.reason,
-            l2_score_delta: l2Score - l2ScoreBefore,
+            l2_score_delta: 0,  // always 0: MinCut_Gate disabled pending fast-path recalibration
             l2_score_after: l2Score,
           }
         : {
