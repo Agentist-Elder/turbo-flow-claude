@@ -475,6 +475,28 @@ export class VectorScanner {
   }
 
   /**
+   * Search the coherence DB and return the raw cosine distances (not yet
+   * aggregated into λ). Used by calibration probes that need per-neighbor
+   * distances for Stoer-Wagner star-graph min-cut computation.
+   *
+   * Fails safe: returns empty array if DB unavailable or search throws.
+   */
+  async searchCoherenceDbDistances(vector: number[], k: number): Promise<{ distances: number[]; dbSize: number }> {
+    if (!this.initialized) await this.initialize();
+    if (!this.coherenceDb) return { distances: [], dbSize: 0 };
+
+    try {
+      const results = await this.coherenceDb.search({ vector, k });
+      const distances: number[] = results.map((r: SearchResult) => r.score);
+      const dbSize = await this.coherenceDb.len();
+      return { distances, dbSize };
+    } catch (err) {
+      console.warn('[VectorScanner] searchCoherenceDbDistances failed (fail-open):', err);
+      return { distances: [], dbSize: 0 };
+    }
+  }
+
+  /**
    * Search the coherence DB with a pre-computed semantic embedding and return
    * the raw λ density proxy + DB size. Used by the async auditor in runGoal()
    * which supplies a true ONNX embedding instead of the fast-path char-code proxy.

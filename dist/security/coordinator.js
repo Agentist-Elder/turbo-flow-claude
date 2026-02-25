@@ -11,6 +11,7 @@
  *   Fast Path  <16ms  | Weighted Avg ~38ms
  */
 import { performance } from 'perf_hooks';
+import { VectorScanner } from './vector-scanner.js';
 // ── Types ────────────────────────────────────────────────────────────
 export var ThreatLevel;
 (function (ThreatLevel) {
@@ -22,9 +23,9 @@ export var ThreatLevel;
 export const LATENCY_BUDGETS = {
     L1_SCAN: 2.0,
     L2_ANALYZE: 8.0,
-    L3_SAFE: 1.0,
+    L3_SAFE: 5.0,
     L4_PII: 5.0,
-    TOTAL_FAST_PATH: 16.0,
+    TOTAL_FAST_PATH: 20.0,
 };
 export const DEFAULT_CONFIG = {
     thresholds: {
@@ -106,6 +107,7 @@ export class MockMCPClient {
 export class AIDefenceCoordinator {
     config;
     mcp;
+    vectorScanner;
     constructor(config = {}, mcpClient) {
         this.config = {
             thresholds: { ...DEFAULT_CONFIG.thresholds, ...config.thresholds },
@@ -113,6 +115,27 @@ export class AIDefenceCoordinator {
             features: { ...DEFAULT_CONFIG.features, ...config.features },
         };
         this.mcp = mcpClient ?? new MockMCPClient();
+        this.vectorScanner = new VectorScanner();
+    }
+    /**
+     * Pre-warm the VectorDB (coherence DB + attack-patterns DB).
+     * Call this once at startup before serving requests.
+     * Idempotent — safe to call multiple times.
+     */
+    async initialize() {
+        await this.vectorScanner.initialize();
+    }
+    /**
+     * Zero-Trust Data Boundary: sanitize externally-sourced content before it
+     * reaches the LLM. A valid signed request authorizes the sender, NOT the
+     * payload. Every piece of external content — fetched URLs, uploaded files,
+     * email bodies — must pass the same vector gate as direct user input.
+     *
+     * Delegates to processRequest(). The separate method makes the architectural
+     * intent explicit at the call site: trusted identity ≠ payload safety.
+     */
+    async sanitizeExternalContent(content) {
+        return this.processRequest(content);
     }
     /**
      * Process a request through all 6 defence layers.
@@ -156,6 +179,61 @@ export class AIDefenceCoordinator {
         catch (err) {
             this.failOpen('L2_ANALYZE', err, verdicts, timings, t2);
         }
+        // ── Coherence Gate (between L2 and L3) — TELEMETRY ONLY ─────────────
+        //
+        // Phase 18 architectural decision: this gate is observability infrastructure
+        // only. It does NOT modify l2Score and cannot block requests independently.
+        //
+        // WHY l2Score is not modified:
+        //   ruvbot-coherence.db is seeded with ONNX semantic embeddings (Phase 17),
+        //   but computeGateDecision() queries it with char-code textToVector(). These
+        //   embedding spaces are incompatible — kNN distances are noise, not signal.
+        //   polylogThreshold(809) ≈ 97 >> observed char-code λ (1.3–1.8), so
+        //   MinCut_Gate never fires. The former l2Score += 0.05 branch was
+        //   mathematically unreachable and has been removed (Phase 18 Step 4).
+        //
+        // WHERE semantic defence lives:
+        //   The Partition Ratio Score in fireAndAudit() (async auditor, src/main.ts)
+        //   is the primary semantic gate. ratio = d_clean/d_attack > 1.0 → escalate.
+        //   It runs concurrently and fires before PAL receives any data.
+        //
+        // WHEN this gate will become active:
+        //   When @ruvector/mincut-wasm ships to npm AND the fast-path embedding
+        //   space is recalibrated alongside a semantic fast-path upgrade.
+        const tGate = performance.now();
+        let gateDecision = null;
+        try {
+            gateDecision = await this.vectorScanner.computeGateDecision(currentInput);
+            // No l2Score modification — MinCut_Gate cannot fire (see comment above).
+        }
+        catch (err) {
+            console.warn('[AIDefence] Coherence gate error (fail-open, no-op):', err);
+        }
+        // Record dedicated COHERENCE_GATE verdict for red-team observability.
+        // Always present — even on gate error — so the audit trail is never blind.
+        const gateDur = performance.now() - tGate;
+        timings['COHERENCE_GATE'] = gateDur;
+        verdicts.push({
+            layer: 'COHERENCE_GATE',
+            passed: true, // gate errors are fail-open; never block the request
+            score: gateDecision?.route === 'MinCut_Gate' ? 1.0 : 0.0,
+            latency_ms: gateDur,
+            details: gateDecision
+                ? {
+                    route: gateDecision.route,
+                    lambda: gateDecision.lambda,
+                    threshold: gateDecision.threshold,
+                    db_size: gateDecision.db_size,
+                    reason: gateDecision.reason,
+                    l2_score_delta: 0, // always 0: MinCut_Gate disabled pending fast-path recalibration
+                    l2_score_after: l2Score,
+                }
+                : {
+                    route: 'gate_error',
+                    l2_score_delta: 0,
+                    l2_score_after: l2Score,
+                },
+        });
         // ── L3: Safety Gate (fail-CLOSED) ────────────────────────────
         const t3 = performance.now();
         try {

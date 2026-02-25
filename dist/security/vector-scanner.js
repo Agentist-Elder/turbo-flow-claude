@@ -10,10 +10,15 @@
  */
 import { performance } from 'perf_hooks';
 import { createRequire } from 'module';
+import { mkdirSync } from 'fs';
+import { dirname } from 'path';
+import { DB_CONFIG, MinCutGate, estimateLambda } from './min-cut-gate.js';
 const _require = createRequire(import.meta.url);
 const { VectorDB } = _require('ruvector');
 export const DEFAULT_SCANNER_CONFIG = {
     dbPath: '.claude-flow/data/attack-patterns.db',
+    coherenceDbPath: '.claude-flow/data/ruvbot-coherence.db',
+    cleanReferenceDbPath: '.claude-flow/data/ruvbot-clean-reference.db',
     dimensions: 384,
     attackThreshold: 0.3,
     suspiciousThreshold: 0.5,
@@ -120,8 +125,13 @@ export function textToVector(text, dimensions = 384) {
 export class VectorScanner {
     config;
     db = null;
+    coherenceDb = null;
+    cleanDb = null;
     initialized = false;
     patternRegistry = [];
+    minCutGate = new MinCutGate();
+    coherenceGate = new MinCutGate();
+    lastGateDecision = null;
     constructor(config = {}) {
         this.config = { ...DEFAULT_SCANNER_CONFIG, ...config };
     }
@@ -129,11 +139,65 @@ export class VectorScanner {
     async initialize() {
         if (this.initialized)
             return;
+        // Ensure the data directory exists before VectorDB tries to create the file.
+        // Previously this was omitted, causing silent in-memory fallback.
+        mkdirSync(dirname(this.config.dbPath), { recursive: true });
+        // Phase 15 fix: use correct @ruvector/core field names.
+        // Old (broken): { path, metric: 'cosine' } — fields silently ignored → in-memory only.
+        // New (correct): { storagePath, distanceMetric: 'Cosine' } — persists to disk.
         this.db = new VectorDB({
-            path: this.config.dbPath,
+            storagePath: this.config.dbPath,
             dimensions: this.config.dimensions,
-            metric: 'cosine',
+            distanceMetric: 'Cosine', // capital C required — lowercase throws enum error
+            hnswConfig: {
+                m: DB_CONFIG.m,
+                efConstruction: DB_CONFIG.efConstruction,
+                efSearch: DB_CONFIG.efSearch,
+                maxElements: DB_CONFIG.maxElements,
+            },
         });
+        // Open coherence DB for gate routing (separate from attack-patterns DB).
+        // Fails gracefully — gate defaults to L3_Gate if DB is unavailable.
+        if (this.config.coherenceDbPath) {
+            try {
+                mkdirSync(dirname(this.config.coherenceDbPath), { recursive: true });
+                this.coherenceDb = new VectorDB({
+                    storagePath: this.config.coherenceDbPath,
+                    dimensions: this.config.dimensions,
+                    distanceMetric: 'Cosine',
+                    hnswConfig: {
+                        m: DB_CONFIG.m,
+                        efConstruction: DB_CONFIG.efConstruction,
+                        efSearch: DB_CONFIG.efSearch,
+                        maxElements: DB_CONFIG.maxElements,
+                    },
+                });
+            }
+            catch (err) {
+                console.warn('[VectorScanner] Coherence DB unavailable (gate will default to L3):', err);
+            }
+        }
+        // Open clean reference DB for Partition Ratio Score.
+        // Fails gracefully — partitionRatioScore() returns null if unavailable.
+        if (this.config.cleanReferenceDbPath) {
+            try {
+                mkdirSync(dirname(this.config.cleanReferenceDbPath), { recursive: true });
+                this.cleanDb = new VectorDB({
+                    storagePath: this.config.cleanReferenceDbPath,
+                    dimensions: this.config.dimensions,
+                    distanceMetric: 'Cosine',
+                    hnswConfig: {
+                        m: DB_CONFIG.m,
+                        efConstruction: DB_CONFIG.efConstruction,
+                        efSearch: DB_CONFIG.efSearch,
+                        maxElements: DB_CONFIG.maxElements,
+                    },
+                });
+            }
+            catch (err) {
+                console.warn('[VectorScanner] Clean reference DB unavailable (partitionRatioScore will return null):', err);
+            }
+        }
         this.initialized = true;
     }
     /** Expose normalization for external use / testing. */
@@ -175,6 +239,10 @@ export class VectorScanner {
             console.error('[VectorScanner] HNSW search failed:', err);
             return { classification: 'informational', confidence: 0, vector_matches: 0, dtw_score: 1.0 };
         }
+        // 3a. λ-gate routing decision (Phase 15 AISP spec ⟦Γ⟧)
+        // knnDistances: cosine distance (lower = closer match)
+        const knnDistances = results.map(r => r.score);
+        this.lastGateDecision = this.minCutGate.decide(knnDistances, this.patternRegistry.length);
         // 4. Classify based on cosine distance thresholds
         let bestScore = 1.0;
         let matchCount = 0;
@@ -286,5 +354,146 @@ export class VectorScanner {
     /** Number of patterns tracked by this instance. */
     get registrySize() {
         return this.patternRegistry.length;
+    }
+    /**
+     * Last gate routing decision from scan().
+     * Includes λ estimate, threshold, and whether MinCut_Gate was selected.
+     * null if scan() has not been called yet.
+     */
+    get lastGate() {
+        return this.lastGateDecision;
+    }
+    /**
+     * Measure λ for a given set of k-NN distances (exposed for testing).
+     */
+    measureLambda(knnDistances) {
+        return estimateLambda(knnDistances);
+    }
+    /**
+     * Search the coherence DB and return the raw cosine distances (not yet
+     * aggregated into λ). Used by calibration probes that need per-neighbor
+     * distances for Stoer-Wagner star-graph min-cut computation.
+     *
+     * Fails safe: returns empty array if DB unavailable or search throws.
+     */
+    async searchCoherenceDbDistances(vector, k) {
+        if (!this.initialized)
+            await this.initialize();
+        if (!this.coherenceDb)
+            return { distances: [], dbSize: 0 };
+        try {
+            const results = await this.coherenceDb.search({ vector, k });
+            const distances = results.map((r) => r.score);
+            const dbSize = await this.coherenceDb.len();
+            return { distances, dbSize };
+        }
+        catch (err) {
+            console.warn('[VectorScanner] searchCoherenceDbDistances failed (fail-open):', err);
+            return { distances: [], dbSize: 0 };
+        }
+    }
+    /**
+     * Search the coherence DB with a pre-computed semantic embedding and return
+     * the raw λ density proxy + DB size. Used by the async auditor in runGoal()
+     * which supplies a true ONNX embedding instead of the fast-path char-code proxy.
+     *
+     * Fails safe: returns λ=0 if the coherence DB is unavailable or search throws.
+     */
+    async searchCoherenceDb(vector, k) {
+        if (!this.initialized)
+            await this.initialize();
+        if (!this.coherenceDb)
+            return { lambda: 0, dbSize: 0 };
+        try {
+            const results = await this.coherenceDb.search({ vector, k });
+            const dists = results.map((r) => r.score);
+            const dbSize = await this.coherenceDb.len();
+            const lambda = estimateLambda(dists);
+            return { lambda, dbSize };
+        }
+        catch (err) {
+            console.warn('[VectorScanner] searchCoherenceDb failed (fail-open):', err);
+            return { lambda: 0, dbSize: 0 };
+        }
+    }
+    /**
+     * Compute the Partition Ratio Score for a pre-computed ONNX embedding.
+     *
+     * ratio = d_clean / d_attack
+     *
+     * Where d_attack = avg cosine distance to k nearest neighbors in the
+     * attack coherence DB (ruvbot-coherence.db) and d_clean = avg cosine
+     * distance to k nearest neighbors in the clean reference DB
+     * (ruvbot-clean-reference.db, seeded with 50 benign prompts).
+     *
+     * ratio > PARTITION_RATIO_THRESHOLD (1.0) → closer to attack space
+     * ratio ≤ PARTITION_RATIO_THRESHOLD (1.0) → closer to clean space
+     *
+     * Returns null if either DB is unavailable (caller should fall back to λ).
+     * Never throws to the caller.
+     */
+    async partitionRatioScore(vector, k) {
+        if (!this.initialized)
+            await this.initialize();
+        if (!this.coherenceDb || !this.cleanDb)
+            return null;
+        try {
+            const [attackResults, cleanResults, attackSize, cleanSize] = await Promise.all([
+                this.coherenceDb.search({ vector, k }),
+                this.cleanDb.search({ vector, k }),
+                this.coherenceDb.len(),
+                this.cleanDb.len(),
+            ]);
+            const attackDists = attackResults.map((r) => r.score);
+            const cleanDists = cleanResults.map((r) => r.score);
+            if (attackDists.length === 0 || cleanDists.length === 0)
+                return null;
+            const d_attack = attackDists.reduce((a, b) => a + b, 0) / attackDists.length;
+            const d_clean = cleanDists.reduce((a, b) => a + b, 0) / cleanDists.length;
+            // Avoid division by zero: if attack DB is empty / returns zero distances
+            if (d_attack < 1e-9)
+                return null;
+            return {
+                ratio: d_clean / d_attack,
+                d_attack,
+                d_clean,
+                dbSizeAttack: attackSize,
+                dbSizeClean: cleanSize,
+            };
+        }
+        catch (err) {
+            console.warn('[VectorScanner] partitionRatioScore failed (fail-open):', err);
+            return null;
+        }
+    }
+    /**
+     * Compute the MinCutGate routing decision for an input by searching
+     * the coherence DB (ruvbot-coherence.db, seeded with 630 synthetic patterns).
+     *
+     * Uses db.len() — not patternRegistry.length — so the gate reflects
+     * the persisted DB size regardless of how many patterns were inserted
+     * in this session.
+     *
+     * Fails safe: returns L3_Gate decision if the coherence DB is unavailable
+     * or the search throws. Never throws to the caller.
+     */
+    async computeGateDecision(input) {
+        if (!this.initialized)
+            await this.initialize();
+        if (!this.coherenceDb) {
+            return this.coherenceGate.decide([], 0); // safe default
+        }
+        const normalized = normalizeInput(input);
+        const vector = textToVector(normalized, this.config.dimensions);
+        try {
+            const results = await this.coherenceDb.search({ vector, k: this.config.searchK });
+            const knnDistances = results.map((r) => r.score);
+            const dbSize = await this.coherenceDb.len();
+            return this.coherenceGate.decide(knnDistances, dbSize);
+        }
+        catch (err) {
+            console.warn('[VectorScanner] Coherence gate search failed (L3_Gate default):', err);
+            return this.coherenceGate.decide([], 0);
+        }
     }
 }

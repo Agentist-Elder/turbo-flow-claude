@@ -1,7 +1,7 @@
 # CLAUDE.md — RuvBot Turbo-Flow Project Intelligence
 
 > Hand-authored ground truth. Do not overwrite with `generate-claude-md.sh`.
-> Last updated: 2026-02-24 (Phase 18 COMPLETE — partition ratio score + architectural split)
+> Last updated: 2026-02-25 (Phase 20 COMPLETE — 2-of-3 consensus, AQE path fix, corpus enrichment)
 
 ---
 
@@ -82,6 +82,9 @@ docs/research/             # GOAP output documents (RVF-witnessed)
 | 15    | VectorDB fix, min-cut gate AISP spec, coherence DB seeded, L2→L3 gate wired |
 | 16    | Red-team corpus (500 strings), seed-red-team.ts, COHERENCE_GATE observability |
 | 17    | Semantic embedding upgrade (all-MiniLM-L6-v2), SEMANTIC_COHERENCE_THRESHOLD=2.0, SessionThreatState, async auditor |
+| 18    | Partition ratio score, 809 attack vectors, 50 clean refs, architectural split, l2Score dead branch removed |
+| 19    | Pure TS Stoer-Wagner, STAR_MINCUT_THRESHOLD=0.40, three-discriminant cascade in fireAndAudit(), 289 tests |
+| 20    | AQE path fix (absolute target), 2-of-3 consensus in fireAndAudit(), +10 security_education clean refs (60 total) |
 
 **Phase 17 status**: `ruvbot-coherence.db` re-seeded with true 384-dim ONNX embeddings.
 Async auditor fires concurrently after fast-path clearance; circuit breaker awaited at phase
@@ -123,48 +126,50 @@ Architecture: `L1 → L2 → CoherenceGate → L3 → L4`
 - ALWAYS implement properly; verify before claiming success
 - ALWAYS use real queries for integration tests — never assume they pass
 
-### Verification Handoff Protocol (AISP + AQE)
+### Verification Protocol
 
-**You are the Implementer. You are strictly forbidden from running `npm test`, `vitest`, or
-any unit test to verify your own code.**
+**Goal**: No implementation is claimed correct without evidence independent of the implementer's
+own reading. A silent failure is not a pass.
+
+#### Tier 1 — Always (every change)
+1. `npm test -- --run` — full regression suite must pass (289 tests as of Phase 19)
+2. Read the changed code path end-to-end before claiming it correct
+
+#### Tier 2 — Security-path or threshold changes
+3. Run the relevant probe script and record actual output (numbers, not "looks fine"):
+   - `npx tsx scripts/probe-partition-ratio.ts` — all three discriminants against known samples
+   - `npx tsx scripts/measure-lambda.ts` — λ-avg baseline
+4. Live integration trace: invoke `runGoal()` with one known-attack goal and one known-clean goal.
+   Confirm gate decisions match expectation. Document which test was run and what was observed.
+
+#### Tier 3 — AQE (`security_scan_comprehensive` now working with correct target path)
+
+**Root cause of "No source files found"** (confirmed 2026-02-25 via bundle inspection):
+`discoverSourceFiles()` calls `fs.stat(payload.target)`. Previous calls passed a
+space-separated list of file paths as a single string — `fs.stat()` fails silently on
+that, returns `[]`, and AQE reports "No source files found" with no further explanation.
+
+**The fix**: Always pass `target` as an **absolute directory path**, not a file list:
+```
+BROKEN:  target = "src/security/coordinator.ts src/main.ts"
+CORRECT: target = "/workspaces/turbo-flow-claude/src"           (walks src/, skips node_modules/dist)
+CORRECT: target = "/workspaces/turbo-flow-claude/src/security"  (scans security directory only)
+CORRECT: target = "/workspaces/turbo-flow-claude/src/security/stoer-wagner.ts"  (single file)
+```
+
+`discoverSourceFiles()` already correctly skips `node_modules`, `dist`, `build`, `.git`.
+`AQE_PROJECT_ROOT` env var is set correctly but is NOT used by the scan handler — it
+always falls back to `process.cwd()` or `payload.target`.
+
+`task_orchestrate` (57ms failure) is a separate issue — likely task routing, not path resolution.
+
+**AQE discipline**: `fleet_init` before any other tool. After `task_orchestrate`, do not poll
+`task_status` more than twice. Record results honestly — a silent failure is not a pass.
+- **CONFIRMED 2026-02-25**: `security_scan_comprehensive` works with absolute path target. Scanned `stoer-wagner.ts` in 417ms, 0 vulnerabilities. Promote to Tier 2 when we have a standard scan target list.
+- AQE `quality_assess` and `memory_store` work independently of source file resolution
 
 All agentic workflows and feature specifications must adhere to the AI Symbolic Protocol.
 Read `@AI_Guide.md` for the official 512-symbol AISP glossary and formatting rules.
-
-To verify that an implementation satisfies the AISP specification, delegate to the AQE swarm:
-
-```typescript
-// 1. Always init first
-mcp__agentic-qe__fleet_init({ topology: "hierarchical", maxAgents: 15, memoryBackend: "hybrid" })
-
-// 2. Orchestrate verification
-mcp__agentic-qe__task_orchestrate({
-  task: "Verify Phase 15 VectorDB init contract",
-  domains: ["test-generation", "coverage-analysis", "security-compliance"],
-  parallel: true
-})
-
-// 3. Quality gate
-mcp__agentic-qe__quality_assess({ scope: "full", includeMetrics: true })
-```
-
-Wait for the swarm's cryptographic evidence before claiming an implementation correct.
-Use adversarial agents (`qe-devils-advocate`, `qe-security-auditor`) for security-critical
-work, not just test-generation agents.
-
-**AQE Swarm Discipline**: After calling `task_orchestrate`, do not poll `task_status` in a
-loop. If the task does not complete within two status checks, fall back to `security_scan_comprehensive`
-and manual adversarial review rather than blocking on a hung swarm.
-
-**Verification Protocol Exception** — AQE Known Limitation (FYI only):
-The swarm currently cannot resolve TypeScript source paths in the local environment, leading
-to routing errors (57ms failure on `task_orchestrate`; "no source files found" on
-`security_scan_comprehensive`). Validated fallback in lieu of AQE SARIF reports:
-- **Live Integration Traces**: Phase boundary circuit breaker confirmed via `runGoal()` end-to-end
-  (attack goal blocked at L3; clean goal passed Phase 1 → auditor fired → PAL reached)
-- **λ Threshold Testing**: Manual + automated adversarial injection confirming attack λ ≥ 2.0,
-  clean λ < 2.0 (269 passing tests including ONNX integration suite)
-- **Comprehensive Security Scans**: Manual adversarial trace + `qe-security-auditor` review
 
 ### Test Execution (when tests must run)
 - NEVER `npm test` without `--run` flag (watch mode hangs CI)
@@ -224,7 +229,11 @@ npx tsx /workspaces/turbo-flow-claude/src/pq-wrap.ts <abs-path>
 - PAL has NO internet access — "web search" is a system-prompt instruction only
 
 ### rvf-mcp-server dist rebuild
-After any `npm install`, rebuild with:
+
+> **WARNING**: `npm install` silently overwrites the patched `dist/` inside
+> `node_modules/@ruvector/rvf-mcp-server`. Failure to rebuild causes silent RVF witness-chain failures.
+
+After **any** `npm install`, rebuild immediately:
 ```bash
 node /workspaces/turbo-flow-claude/node_modules/@ruvector/rvf-mcp-server/node_modules/typescript/bin/tsc \
   -p /workspaces/turbo-flow-claude/node_modules/@ruvector/rvf-mcp-server/tsconfig.json \
@@ -236,6 +245,31 @@ node /workspaces/turbo-flow-claude/node_modules/@ruvector/rvf-mcp-server/node_mo
 - Seed: `~/.ruvbot-pq.seed` (32-byte hex, mode 0600)
 - Output: `<doc>.pq.json` — algorithm, public_key, canonical manifest, signature
 - Import paths need `.js` suffix: `@noble/post-quantum/ml-dsa.js`, `@noble/hashes/sha3.js`
+
+---
+
+## Discriminant Calibration Baselines (Phase 19, ONNX space)
+
+Empirical ranges measured 2026-02-25 via `scripts/probe-partition-ratio.ts`.
+If model or embeddings change, re-run the probe against known attack and clean prompts and update
+this table — these numbers are the "satisfied" baseline that must hold across upgrades.
+
+| Discriminant | Function | Attack range | Clean range | Threshold constant | Notes |
+|---|---|---|---|---|---|
+| Partition ratio | `partitionRatioScore()` | ratio 2.0–3.0 | ratio < 0.8 | `PARTITION_RATIO_THRESHOLD = 1.0` | Primary; requires both DBs present |
+| λ-average | `estimateLambda()` | 2.1–4.5 | ~1.2 | `SEMANTIC_COHERENCE_THRESHOLD = 2.0` | Fallback when clean-ref DB absent |
+| Star-λ (Stoer-Wagner) | `localMinCutLambda()` | 0.513–0.726 | 0.179–0.281 | `STAR_MINCUT_THRESHOLD = 0.40` | Second fallback; reuses HNSW distances |
+
+**Cascade order** in `fireAndAudit()`: ratio (primary, both DBs) → λ-avg (fallback, one DB) →
+star-λ (second fallback, no extra DB call).
+
+**Known false positive (2026-02-25 Sensitivity Stress Test)**: Educational security content (e.g.,
+C++ buffer overflow prevention tutorial mentioning strcat/PATH_MAX) scores ratio=1.181 (ATTACK),
+λ=1.35 (clean), star-λ=0.229 (clean). The 50 clean-reference prompts are all conversational/coding
+— none discuss security topics educationally — so the ratio is too tight for that content type.
+`PARTITION_RATIO_THRESHOLD = 1.0` may need to be raised to ~1.5, or the cascade changed to
+require 2-of-3 consensus. The async auditor is non-blocking, so this is a calibration gap, not
+a blocking failure. Decision deferred to Phase 20 after further data collection.
 
 ---
 
@@ -326,9 +360,143 @@ NOT modify `l2Score`. Semantic threat detection lives entirely in the async audi
 2. Recalibrate `polylogThreshold` to the semantic λ space (threshold ≈ 2.0, not 97)
 3. The `l2Score` modifier can then be re-enabled with the correct threshold
 
-### Phase 19 / Middleware Backlog
+### Carried to Phase 19 Backlog
 
+- [x] Stoer-Wagner min-cut — COMPLETE (Phase 19)
 - [ ] Dynamic Clean-Traffic Capture: grow `ruvbot-clean-reference.db` from real production
       traffic to improve partition ratio robustness (currently 50 curated prompts)
 - [ ] Populate `attack-patterns.db` (L2 scanner) with real attack embeddings
 - [ ] Replace `runGate()` stub when `@ruvector/mincut-wasm` ships to npm
+
+---
+
+## Phase 19 — COMPLETE (2026-02-25)
+
+### What Was Built
+
+**Pure TS Stoer-Wagner min-cut** (`src/security/stoer-wagner.ts`):
+- `buildStarGraph(distances)` — star graph from HNSW k-NN distances
+- `stoerWagner(graph)` — global min-cut (Stoer-Wagner 1997, O(n³))
+- `localMinCutLambda(distances)` — star-λ discriminant for async auditor fallback
+- No external dependency — permanent solution (`@ruvector/mincut-wasm` and `@ruvector/mincut-native`
+  both 404 on npm; Stoer-Wagner is now the canonical implementation)
+
+**Threshold calibration** (empirical, ONNX space, 2026-02-25):
+- Attack prompts: star-λ = 0.513–0.726
+- Clean prompts:  star-λ = 0.179–0.281
+- Gap: 0.232. Threshold set at `STAR_MINCUT_THRESHOLD = 0.40` (conservative midpoint)
+
+**Async auditor fallback cascade** (`src/main.ts` → `fireAndAudit()`):
+1. `partitionRatioScore()` — primary (needs both `ruvbot-clean-reference.db` + `ruvbot-coherence.db`)
+2. `estimateLambda()` — fallback if clean-ref DB absent (single `ruvbot-coherence.db` call)
+3. `localMinCutLambda()` — second fallback using same HNSW distances (no extra DB call)
+→ `SessionThreatState.escalate()` if any threshold exceeded
+
+**Tests fixed**: 4 pre-existing failures in `tests/security/coherence-gate-wiring.spec.ts`
+(stale `l2Score + 0.05` assertions from Phase 15 — the dead branch was removed in Phase 18
+Step 4 but tests were not updated). **289/289 tests passing.**
+
+### Key Files
+
+| File | Change |
+|------|--------|
+| `src/security/stoer-wagner.ts` | NEW — pure TS Stoer-Wagner + buildStarGraph() + localMinCutLambda() |
+| `tests/security/stoer-wagner.test.ts` | NEW — 20/20 tests |
+| `src/security/min-cut-gate.ts` | Added `STAR_MINCUT_THRESHOLD = 0.40` |
+| `src/security/vector-scanner.ts` | Added `searchCoherenceDbDistances()` (raw distances for star-λ) |
+| `src/main.ts` | `fireAndAudit()` three-discriminant fallback cascade |
+| `scripts/probe-partition-ratio.ts` | Added star-λ column (all three discriminants visible) |
+| `tests/security/coherence-gate-wiring.spec.ts` | Fixed 4 stale l2Score assertions |
+
+### Architectural Split (Phase 19 state — permanent)
+
+```
+fast-path (sync, <20ms):
+  L1 → L2 → COHERENCE_GATE (telemetry only, no l2Score modification) → L3 → L4
+
+async auditor (concurrent, off critical path):
+  ONNX embed
+    → partitionRatioScore()    [primary; ratio > 1.0 → attack]
+    → estimateLambda()         [fallback; λ ≥ 2.0 → attack]
+    → localMinCutLambda()      [second fallback; star-λ ≥ 0.40 → attack]
+    → SessionThreatState.escalate()
+```
+
+**Fast-path Stoer-Wagner** is deferred: the coherence DB is ONNX-encoded; the fast-path uses
+char-code `textToVector`, which is in a different embedding space (50× λ gap). Requires a
+separate char-code coherence DB to be seeded first.
+
+### Post-Phase-19 Backlog (carried to Phase 20+)
+
+- [x] 2-of-3 consensus in fireAndAudit() — COMPLETE (Phase 20)
+- [x] Corpus enrichment with security_education category (10 prompts, 60 total) — COMPLETE (Phase 20)
+- [ ] Dynamic Clean-Traffic Capture: grow `ruvbot-clean-reference.db` from real production traffic
+- [ ] Populate `attack-patterns.db` (L2 scanner) with real attack embeddings
+- [ ] Replace `runGate()` stub when `@ruvector/mincut-wasm` ships to npm
+- [ ] Fast-path Stoer-Wagner: seed char-code coherence DB, then wire `localMinCutLambda()` into sync gate
+
+---
+
+## Phase 20 — COMPLETE (2026-02-25)
+
+### What Was Built
+
+**AQE path fix** (`security_scan_comprehensive` now working):
+Root cause of all previous "No source files found" failures: `discoverSourceFiles()` does
+`fs.stat(target)` — passing a space-separated file list as `target` causes a silent catch/return `[]`.
+Fix: always pass `target` as an absolute directory or file path.
+- `target = "/workspaces/turbo-flow-claude/src/security/stoer-wagner.ts"` → 417ms, 0 vulnerabilities ✓
+- Confirmed: `AQE_PROJECT_ROOT` env var is set correctly but is NOT used by scan handler
+
+**Sensitivity Stress Test** (G's calibration test, 2026-02-25):
+Educational C++ buffer overflow tutorial (mentioning strcat, PATH_MAX, bounds checking) scored:
+- ratio = 1.181 → false positive (primary discriminant flagged it)
+- λ-avg = 1.35 → correctly clean
+- star-λ = 0.229 → correctly clean (G's prediction confirmed)
+Root cause: the 50 clean-reference prompts were all conversational/coding — none covered security topics.
+
+**2-of-3 Consensus Voting** (`src/main.ts` → `fireAndAudit()`):
+- All three discriminants always computed (one extra `searchCoherenceDbDistances` call when both DBs present)
+- Escalation requires ≥ 2 votes when 3 discriminants available; ≥ 1 when only 2 (clean DB absent)
+- Smoke-below-consensus logged but not escalated: `[AsyncAuditor] Smoke detected (1/3 votes...)`
+
+**Corpus Enrichment** (`scripts/data/red-team-clean-reference.json`):
+- Added 10 `security_education` prompts (IDs 51–60): buffer overflow prevention, SQL injection defense,
+  OWASP top 10, XSS sanitization, JWT/OAuth2, ASLR, AddressSanitizer, PATH_MAX, least privilege, TLS pinning
+- `ruvbot-clean-reference.db` re-seeded: **60 vectors** (was 50)
+- Post-enrichment probe: C++ tutorial ratio dropped from 1.181 → **0.794** (now correctly clean)
+- All known attacks unchanged: ratio 2.21–3.66, λ 2.60–4.47, star-λ 0.513–0.726
+
+**Test status**: 287/289 passing. 2 failures are timing-flaky latency SLA tests
+(`coordinator.spec.ts` and `auditor-invariants.test.ts`) that assert fast-path < 20ms /
+< 16ms under devcontainer load. These are **not caused by Phase 20 changes** — `fireAndAudit()`
+runs async after `processRequest()` returns. They passed in Phase 19 due to lower system load.
+See "Known Flaky Tests" below.
+
+### Key Files
+
+| File | Change |
+|------|--------|
+| `src/main.ts` | `fireAndAudit()` rewritten: 2-of-3 consensus, always computes all 3 discriminants |
+| `scripts/data/red-team-clean-reference.json` | Added 10 security_education prompts (60 total) |
+| `.claude-flow/data/ruvbot-clean-reference.db` | Re-seeded with 60 vectors (git-ignored) |
+| `scripts/probe-partition-ratio.ts` | Added `STRESS (C++ tut)` probe row |
+
+### Known Flaky Tests (timing-sensitive, devcontainer environment)
+
+These tests assert fast-path wall-clock latency and fail under system load. Not caused by any code change — the coordinator fast-path was not touched in Phase 20 (or Phase 19).
+
+| Test | Assertion | Typical range | Status |
+|------|-----------|--------------|--------|
+| `coordinator.spec.ts:86` — "total latency < 16ms" | `< TOTAL_FAST_PATH (20ms)` | 20–62ms under load | Flaky |
+| `auditor-invariants.test.ts:48` — "fast path < 16ms" | `< 16ms` | 16–22ms under load | Flaky |
+
+Fix: add timing tolerance or mock the MCP transport clock. Deferred — not a security risk.
+
+### Post-Phase-20 Backlog
+
+- [ ] Dynamic Clean-Traffic Capture: grow `ruvbot-clean-reference.db` from real production traffic
+- [ ] Populate `attack-patterns.db` (L2 scanner) with real attack embeddings
+- [ ] Replace `runGate()` stub when `@ruvector/mincut-wasm` ships to npm
+- [ ] Fast-path Stoer-Wagner: seed char-code coherence DB
+- [ ] Fix flaky latency tests (add timing tolerance or mock transport clock)

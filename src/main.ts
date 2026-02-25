@@ -29,7 +29,10 @@ import {
   SessionThreatState,
   SEMANTIC_COHERENCE_THRESHOLD,
   PARTITION_RATIO_THRESHOLD,
+  STAR_MINCUT_THRESHOLD,
+  estimateLambda,
 } from './security/min-cut-gate.js';
+import { localMinCutLambda } from './security/stoer-wagner.js';
 import {
   SwarmOrchestrator,
   SecurityViolationError,
@@ -699,10 +702,19 @@ async function fetchUrlsToFiles(urls: string[]): Promise<FetchedSource[]> {
  * semantic embedding, then queries ruvbot-coherence.db for kNN proximity to
  * known attack patterns.
  *
- * If λ ≥ SEMANTIC_COHERENCE_THRESHOLD (2.0), the session threat state is
- * escalated and the pipeline aborts before PAL receives any data.
+ * 2-of-3 Consensus Voting (Phase 20):
+ * All three discriminants are always computed. Escalation requires ≥ 2 votes.
+ * When clean-ref DB is absent only 2 discriminants are available → 1-of-2 (original fallback).
  *
- * Fails open: any error in the auditor is logged but does not block the pipeline.
+ *   ratio   = d_clean/d_attack > PARTITION_RATIO_THRESHOLD (1.0)  [smoke detector, stays sensitive]
+ *   λ-avg  ≥ SEMANTIC_COHERENCE_THRESHOLD (2.0)                   [density proxy, corroborator]
+ *   star-λ ≥ STAR_MINCUT_THRESHOLD (0.40)                         [Stoer-Wagner graph, corroborator]
+ *
+ * Rationale: ratio alone can false-positive on educational security content (C++ buffer overflow
+ * tutorials score ratio≈1.18, λ=1.35, star-λ=0.23 — confirmed Sensitivity Stress Test 2026-02-25).
+ * Raising the threshold would blind the 1.1–1.4 range for real attacks; consensus is safer.
+ *
+ * Fails open: any error is logged but does not block the pipeline.
  * The fast-path gate remains the primary safety control.
  *
  * @param text         Raw text to audit (before normalizeInput)
@@ -721,27 +733,38 @@ async function fireAndAudit(
     const out = await extractor(normalized, { pooling: 'mean', normalize: true }) as { data: Float32Array };
     const vec = Array.from(out.data);
 
-    // Primary discriminant: Partition Ratio Score (d_clean / d_attack)
-    // Falls back to λ threshold if clean reference DB is unavailable.
+    // Step 1: coherence DB search — single call yields distances for both λ-avg and star-λ.
+    const { distances } = await scanner.searchCoherenceDbDistances(vec, 5);
+    const lambda = estimateLambda(distances);
+    const starLambda = localMinCutLambda(distances);
+
+    // Step 2: partition ratio (requires both DBs; null when clean-ref DB is absent).
     const ratioResult = await scanner.partitionRatioScore(vec, 5);
 
-    if (ratioResult !== null) {
-      const { ratio, d_attack, d_clean } = ratioResult;
-      if (ratio > PARTITION_RATIO_THRESHOLD) {
-        const msg =
-          `Async semantic audit: ratio=${ratio.toFixed(3)} > ${PARTITION_RATIO_THRESHOLD} ` +
-          `(d_clean=${d_clean.toFixed(3)}, d_attack=${d_attack.toFixed(3)}) — closer to attack space`;
-        threatState.escalate(msg);
-        console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
-      }
-    } else {
-      // Fallback: clean reference DB not yet seeded — use raw λ
-      const { lambda } = await scanner.searchCoherenceDb(vec, 5);
-      if (lambda >= SEMANTIC_COHERENCE_THRESHOLD) {
-        const msg = `Async semantic audit: λ=${lambda.toFixed(2)} ≥ ${SEMANTIC_COHERENCE_THRESHOLD} (semantic coherence threshold, partition ratio unavailable)`;
-        threatState.escalate(msg);
-        console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
-      }
+    // Step 3: count votes.
+    const votes: string[] = [];
+    if (ratioResult !== null && ratioResult.ratio > PARTITION_RATIO_THRESHOLD) {
+      votes.push(`ratio=${ratioResult.ratio.toFixed(3)}>${PARTITION_RATIO_THRESHOLD}`);
+    }
+    if (lambda >= SEMANTIC_COHERENCE_THRESHOLD) {
+      votes.push(`λ=${lambda.toFixed(2)}≥${SEMANTIC_COHERENCE_THRESHOLD}`);
+    }
+    if (starLambda >= STAR_MINCUT_THRESHOLD) {
+      votes.push(`star-λ=${starLambda.toFixed(3)}≥${STAR_MINCUT_THRESHOLD}`);
+    }
+
+    // Step 4: apply consensus threshold.
+    // 3 discriminants available (clean DB present) → require ≥ 2 votes to escalate.
+    // 2 discriminants available (clean DB absent)  → require ≥ 1 (original fallback behaviour).
+    const totalDiscriminants = ratioResult !== null ? 3 : 2;
+    const consensusThreshold = ratioResult !== null ? 2 : 1;
+
+    if (votes.length >= consensusThreshold) {
+      const msg = `Async semantic audit: consensus ${votes.length}/${totalDiscriminants} — ${votes.join(', ')}`;
+      threatState.escalate(msg);
+      console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
+    } else if (votes.length > 0) {
+      console.log(`[AsyncAuditor] Smoke detected (${votes.length}/${totalDiscriminants} votes, below consensus): ${votes.join(', ')}`);
     }
   } catch (err) {
     console.warn('[AsyncAuditor] Error during semantic audit (fail-open):', err);

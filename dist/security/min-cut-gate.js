@@ -19,12 +19,9 @@
  *   npm install @ruvector/mincut-wasm
  *   Replace runMinCutGate stub below with actual WASM call.
  */
-
 // ── AISP-specified constants ─────────────────────────────────────────────────
-
 /** Total fast-path budget in ms (AISP: FastPath_Budget ≜ 20) */
 export const FAST_PATH_BUDGET_MS = 20;
-
 /**
  * Empirically calibrated threshold for semantic (ONNX) embeddings.
  *
@@ -40,7 +37,6 @@ export const FAST_PATH_BUDGET_MS = 20;
  * compat and is used by the fast-path MinCutGate (still char-code based).
  */
 export const SEMANTIC_COHERENCE_THRESHOLD = 2.0;
-
 /**
  * Partition Ratio Score threshold.
  *
@@ -59,7 +55,6 @@ export const SEMANTIC_COHERENCE_THRESHOLD = 2.0;
  * when the clean reference DB is available; falls back to λ otherwise.
  */
 export const PARTITION_RATIO_THRESHOLD = 1.0;
-
 /**
  * Stoer-Wagner star-graph min-cut threshold for the async auditor fallback.
  *
@@ -73,24 +68,20 @@ export const PARTITION_RATIO_THRESHOLD = 1.0;
  * second independent signal alongside the existing λ-avg (SEMANTIC_COHERENCE_THRESHOLD).
  */
 export const STAR_MINCUT_THRESHOLD = 0.40;
-
 /** L3 fallback gate budget in ms (AISP: L3_Budget ≜ 5) */
 export const L3_BUDGET_MS = 5;
-
 /**
  * VectorDB HNSW configuration contract.
  * AISP: DB_Config ≜ { m: 32, efConstruction: 200, efSearch: 100, maxElements: 1_000_000 }
  * m is FROZEN at DB creation — never change without rebuilding the index.
  */
 export const DB_CONFIG = {
-  m: 32,
-  efConstruction: 200,
-  efSearch: 100,
-  maxElements: 1_000_000,
-} as const;
-
+    m: 32,
+    efConstruction: 200,
+    efSearch: 100,
+    maxElements: 1_000_000,
+};
 // ── λ Estimation ─────────────────────────────────────────────────────────────
-
 /**
  * Conservative superpolylogarithmic threshold: (log₂ n)²
  *
@@ -102,12 +93,12 @@ export const DB_CONFIG = {
  * For n = 630 synthetic patterns: threshold ≈ (log₂ 630)² ≈ 86.
  * For n = 0 (cold start):         threshold = 1 → always falls to L3.
  */
-export function polylogThreshold(n: number): number {
-  if (n <= 1) return 1;
-  const log2n = Math.log2(n);
-  return log2n * log2n;
+export function polylogThreshold(n) {
+    if (n <= 1)
+        return 1;
+    const log2n = Math.log2(n);
+    return log2n * log2n;
 }
-
 /**
  * Estimate λ (min-cut proxy) from k-NN cosine distances.
  *
@@ -121,24 +112,12 @@ export function polylogThreshold(n: number): number {
  *
  * This is a density proxy until ruvector-mincut-wasm computes exact λ.
  */
-export function estimateLambda(knnDistances: number[]): number {
-  if (knnDistances.length === 0) return 0;
-  const avg = knnDistances.reduce((a, b) => a + b, 0) / knnDistances.length;
-  return avg > 1e-9 ? 1 / avg : Number.MAX_SAFE_INTEGER;
+export function estimateLambda(knnDistances) {
+    if (knnDistances.length === 0)
+        return 0;
+    const avg = knnDistances.reduce((a, b) => a + b, 0) / knnDistances.length;
+    return avg > 1e-9 ? 1 / avg : Number.MAX_SAFE_INTEGER;
 }
-
-// ── Gate Routing ─────────────────────────────────────────────────────────────
-
-export type GateRoute = 'L3_Gate' | 'MinCut_Gate';
-
-export interface GateDecision {
-  route: GateRoute;
-  lambda: number;
-  threshold: number;
-  db_size: number;
-  reason: string;
-}
-
 /**
  * λ-gated router with hysteresis.
  *
@@ -147,53 +126,31 @@ export interface GateDecision {
  *   - To EXIT  MinCut_Gate: λ must fall below threshold × (1 - 0.10)
  */
 export class MinCutGate {
-  private lastRoute: GateRoute = 'L3_Gate';
-  private readonly hysteresisBand = 0.10;
-
-  decide(knnDistances: number[], dbSize: number): GateDecision {
-    const lambda = estimateLambda(knnDistances);
-    const threshold = polylogThreshold(dbSize);
-
-    const effectiveThreshold =
-      this.lastRoute === 'L3_Gate'
-        ? threshold * (1 + this.hysteresisBand)   // must exceed to switch in
-        : threshold * (1 - this.hysteresisBand);  // must drop below to switch out
-
-    const route: GateRoute =
-      lambda >= effectiveThreshold ? 'MinCut_Gate' : 'L3_Gate';
-
-    this.lastRoute = route;
-
-    return {
-      route,
-      lambda,
-      threshold,
-      db_size: dbSize,
-      reason:
-        route === 'MinCut_Gate'
-          ? `λ=${lambda.toFixed(3)} ≥ ${effectiveThreshold.toFixed(3)} — superpolylogarithmic, MinCut active`
-          : `λ=${lambda.toFixed(3)} < ${effectiveThreshold.toFixed(3)} — below threshold, L3 fallback`,
-    };
-  }
-
-  /** Reset hysteresis state (useful for tests). */
-  reset(): void {
-    this.lastRoute = 'L3_Gate';
-  }
+    lastRoute = 'L3_Gate';
+    hysteresisBand = 0.10;
+    decide(knnDistances, dbSize) {
+        const lambda = estimateLambda(knnDistances);
+        const threshold = polylogThreshold(dbSize);
+        const effectiveThreshold = this.lastRoute === 'L3_Gate'
+            ? threshold * (1 + this.hysteresisBand) // must exceed to switch in
+            : threshold * (1 - this.hysteresisBand); // must drop below to switch out
+        const route = lambda >= effectiveThreshold ? 'MinCut_Gate' : 'L3_Gate';
+        this.lastRoute = route;
+        return {
+            route,
+            lambda,
+            threshold,
+            db_size: dbSize,
+            reason: route === 'MinCut_Gate'
+                ? `λ=${lambda.toFixed(3)} ≥ ${effectiveThreshold.toFixed(3)} — superpolylogarithmic, MinCut active`
+                : `λ=${lambda.toFixed(3)} < ${effectiveThreshold.toFixed(3)} — below threshold, L3 fallback`,
+        };
+    }
+    /** Reset hysteresis state (useful for tests). */
+    reset() {
+        this.lastRoute = 'L3_Gate';
+    }
 }
-
-// ── Gate Execution ────────────────────────────────────────────────────────────
-
-export interface L3Verdict {
-  blocked: boolean;
-  reason: string;
-}
-
-export interface MinCutResult extends L3Verdict {
-  gate: 'MinCut_Gate' | 'L3_Gate_fallback';
-  lambda: number;
-}
-
 /**
  * Execute the selected gate.
  *
@@ -207,7 +164,6 @@ export interface MinCutResult extends L3Verdict {
  * The routing decision is still tracked for observability.
  */
 // ── Session Threat State ──────────────────────────────────────────────────────
-
 /**
  * Lightweight shared mutable flag for GOAP pipeline abort signaling.
  *
@@ -222,31 +178,22 @@ export interface MinCutResult extends L3Verdict {
  * safely via the event loop.
  */
 export class SessionThreatState {
-  escalated = false;
-  reason: string | null = null;
-
-  escalate(reason: string): void {
-    if (!this.escalated) {
-      this.escalated = true;
-      this.reason = reason;
+    escalated = false;
+    reason = null;
+    escalate(reason) {
+        if (!this.escalated) {
+            this.escalated = true;
+            this.reason = reason;
+        }
     }
-  }
 }
-
-export async function runGate(
-  decision: GateDecision,
-  l3Verdict: L3Verdict,
-  _embedding: number[],
-): Promise<MinCutResult> {
-  if (decision.route === 'MinCut_Gate') {
-    // TODO: ruvector-mincut-wasm not installed — honest fallback to L3 verdict.
-    // When installed, replace this block with the WASM coherence computation.
-    console.warn(
-      '[MinCutGate] MinCut_Gate selected but ruvector-mincut-wasm not installed; ' +
-      'falling back to L3_Gate verdict. Install @ruvector/mincut-wasm to activate.',
-    );
+export async function runGate(decision, l3Verdict, _embedding) {
+    if (decision.route === 'MinCut_Gate') {
+        // TODO: ruvector-mincut-wasm not installed — honest fallback to L3 verdict.
+        // When installed, replace this block with the WASM coherence computation.
+        console.warn('[MinCutGate] MinCut_Gate selected but ruvector-mincut-wasm not installed; ' +
+            'falling back to L3_Gate verdict. Install @ruvector/mincut-wasm to activate.');
+        return { ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda };
+    }
     return { ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda };
-  }
-
-  return { ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda };
 }

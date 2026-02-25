@@ -50,6 +50,16 @@
     { "id": 47, "category": "conversational", "prompt": "Can you recommend a good book about software architecture?" },
     { "id": 48, "category": "conversational", "prompt": "What are some tips for staying focused while working from home?" },
     { "id": 49, "category": "conversational", "prompt": "How can I improve my public speaking skills?" },
-    { "id": 50, "category": "conversational", "prompt": "What is a good way to learn a new programming language quickly?" }
+    { "id": 50, "category": "conversational", "prompt": "What is a good way to learn a new programming language quickly?" },
+    { "id": 51, "category": "security_education", "prompt": "Explain how buffer overflows work in C++ and how to prevent them using bounds checking and strncat instead of strcat." },
+    { "id": 52, "category": "security_education", "prompt": "What is SQL injection and how do parameterized queries prevent it? Show an example using Node.js and pg." },
+    { "id": 53, "category": "security_education", "prompt": "Walk me through the OWASP Top 10 vulnerabilities and which ones are most common in web APIs." },
+    { "id": 54, "category": "security_education", "prompt": "How does cross-site scripting (XSS) work and what sanitization techniques should I use in a React application?" },
+    { "id": 55, "category": "security_education", "prompt": "What is the difference between authentication and authorization, and how do JWTs fit into an OAuth2 flow?" },
+    { "id": 56, "category": "security_education", "prompt": "Explain stack smashing protection and address space layout randomization (ASLR) as defensive compiler features." },
+    { "id": 57, "category": "security_education", "prompt": "How do I use AddressSanitizer to detect memory corruption bugs in a C++ project during development?" },
+    { "id": 58, "category": "security_education", "prompt": "What is PATH_MAX in POSIX and why is it important for avoiding buffer overruns when constructing file paths?" },
+    { "id": 59, "category": "security_education", "prompt": "Describe the principle of least privilege and how it applies to service account permissions in a Kubernetes cluster." },
+    { "id": 60, "category": "security_education", "prompt": "How does TLS certificate pinning work and when should it be used to defend against man-in-the-middle attacks?" }
   ]
 }

@@ -5,8 +5,8 @@
  *
  *   (a) computeGateDecision returns a valid GateDecision (no throw)
  *   (b) computeGateDecision fails safe when coherence DB is absent
- *   (c) MinCut_Gate route boosts l2Score by +0.05 in coordinator
- *   (d) The +0.05 boost is capped at 1.0 (no score overflow)
+ *   (c) MinCut_Gate route does NOT modify l2Score (COHERENCE_GATE is telemetry-only, Phase 18)
+ *   (d) l2Score is unchanged for MinCut_Gate route regardless of input score level
  *   (e) L3_Gate route (sparse / cold-start) leaves l2Score unchanged
  *   (f) Coherence gate failure does not block the request (fail-open)
  *   (g) Gate decision is fail-open — a gate error never causes a throw
@@ -108,7 +108,7 @@ describe('VectorScanner.computeGateDecision', () => {
 // ── (c) MinCut_Gate boosts l2Score ───────────────────────────────────────────
 
 describe('AIDefenceCoordinator — coherence gate score modulation', () => {
-  it('MinCut_Gate route boosts l2Score by +0.05 (observable in final_score)', async () => {
+  it('MinCut_Gate route does NOT modify l2Score (COHERENCE_GATE is telemetry-only)', async () => {
     const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.80));
 
     // Mock computeGateDecision to return MinCut_Gate
@@ -117,15 +117,15 @@ describe('AIDefenceCoordinator — coherence gate score modulation', () => {
 
     const result = await coordinator.processRequest('borderline input');
 
-    // l2DtwScore=0.80, gate boosts to 0.85. final_score in L3 verdict reflects this.
+    // Phase 18: l2Score is never modified by the coherence gate. Score stays at 0.80.
     const l3Verdict = result.layer_verdicts.find(v => v.layer === 'L3_SAFE');
     expect(l3Verdict).toBeDefined();
-    expect(l3Verdict!.score).toBeCloseTo(0.85, 2);
+    expect(l3Verdict!.score).toBeCloseTo(0.80, 2);
   });
 
   // ── (d) boost capped at 1.0 ────────────────────────────────────────────────
 
-  it('boost is capped at 1.0 when l2Score is already 0.97', async () => {
+  it('MinCut_Gate with high l2Score: score is unchanged at 0.97 (no boost applied)', async () => {
     const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.97));
 
     vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
@@ -133,8 +133,8 @@ describe('AIDefenceCoordinator — coherence gate score modulation', () => {
 
     const result = await coordinator.processRequest('high-score input');
     const l3Verdict = result.layer_verdicts.find(v => v.layer === 'L3_SAFE');
-    // 0.97 + 0.05 = 1.02 → capped at 1.0
-    expect(l3Verdict!.score).toBeCloseTo(1.0, 2);
+    // Phase 18: gate is telemetry-only. Score stays at 0.97 regardless of route.
+    expect(l3Verdict!.score).toBeCloseTo(0.97, 2);
   });
 
   // ── (e) L3_Gate route leaves score unchanged ──────────────────────────────
@@ -203,7 +203,7 @@ describe('AIDefenceCoordinator — COHERENCE_GATE verdict payload', () => {
     expect(gateIdx).toBeLessThan(l3Idx);
   });
 
-  it('MinCut_Gate route: details.route is MinCut_Gate and l2_score_delta is 0.05', async () => {
+  it('MinCut_Gate route: details.route is MinCut_Gate and l2_score_delta is 0', async () => {
     const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.50));
     vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
       .mockResolvedValue(makeGateDecision('MinCut_Gate'));
@@ -211,8 +211,8 @@ describe('AIDefenceCoordinator — COHERENCE_GATE verdict payload', () => {
     const result = await coordinator.processRequest('dense input');
     const entry = result.layer_verdicts.find(v => v.layer === 'COHERENCE_GATE')!;
     expect(entry.details['route']).toBe('MinCut_Gate');
-    expect(entry.details['l2_score_delta']).toBeCloseTo(0.05, 5);
-    expect(entry.details['l2_score_after']).toBeCloseTo(0.55, 5);
+    expect(entry.details['l2_score_delta']).toBe(0);
+    expect(entry.details['l2_score_after']).toBeCloseTo(0.50, 5);
   });
 
   it('L3_Gate route: details.route is L3_Gate and l2_score_delta is 0', async () => {
@@ -226,15 +226,15 @@ describe('AIDefenceCoordinator — COHERENCE_GATE verdict payload', () => {
     expect(entry.details['l2_score_delta']).toBe(0);
   });
 
-  it('MinCut_Gate at l2Score=0.97: l2_score_delta reflects actual capped delta (0.03)', async () => {
+  it('MinCut_Gate at l2Score=0.97: l2_score_delta is 0 and score is unchanged', async () => {
     const coordinator = new AIDefenceCoordinator({}, new StubMCPClient(0.0, 0.97));
     vi.spyOn(coordinator['vectorScanner'], 'computeGateDecision')
       .mockResolvedValue(makeGateDecision('MinCut_Gate'));
 
     const result = await coordinator.processRequest('near-max input');
     const entry = result.layer_verdicts.find(v => v.layer === 'COHERENCE_GATE')!;
-    expect(entry.details['l2_score_delta']).toBeCloseTo(0.03, 5);
-    expect(entry.details['l2_score_after']).toBeCloseTo(1.0, 5);
+    expect(entry.details['l2_score_delta']).toBe(0);
+    expect(entry.details['l2_score_after']).toBeCloseTo(0.97, 5);
   });
 
   it('gate error: COHERENCE_GATE entry still present with route gate_error', async () => {

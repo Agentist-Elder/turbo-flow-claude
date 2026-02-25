@@ -89,7 +89,24 @@ export declare class MockMCPClient implements IMCPClient {
 export declare class AIDefenceCoordinator {
     private config;
     private mcp;
+    private vectorScanner;
     constructor(config?: Partial<CoordinatorConfig>, mcpClient?: IMCPClient);
+    /**
+     * Pre-warm the VectorDB (coherence DB + attack-patterns DB).
+     * Call this once at startup before serving requests.
+     * Idempotent — safe to call multiple times.
+     */
+    initialize(): Promise<void>;
+    /**
+     * Zero-Trust Data Boundary: sanitize externally-sourced content before it
+     * reaches the LLM. A valid signed request authorizes the sender, NOT the
+     * payload. Every piece of external content — fetched URLs, uploaded files,
+     * email bodies — must pass the same vector gate as direct user input.
+     *
+     * Delegates to processRequest(). The separate method makes the architectural
+     * intent explicit at the call site: trusted identity ≠ payload safety.
+     */
+    sanitizeExternalContent(content: string): Promise<DefenceResult>;
     /**
      * Process a request through all 6 defence layers.
      * L1-L4 are blocking (must pass before agents see the input).
