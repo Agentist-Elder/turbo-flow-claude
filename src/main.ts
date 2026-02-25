@@ -13,7 +13,7 @@
  */
 
 import { randomUUID, createHash } from 'crypto';
-import { readFile, writeFile, mkdir, unlink, copyFile, readdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, unlink, copyFile, readdir, access } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { tmpdir } from 'os';
@@ -31,6 +31,7 @@ import {
   applyConsensusVoting,
 } from './security/min-cut-gate.js';
 import { localMinCutLambda } from './security/stoer-wagner.js';
+import { decontaminate, type AuditFn } from './security/semantic-chunker.js';
 import {
   SwarmOrchestrator,
   SecurityViolationError,
@@ -40,6 +41,14 @@ import {
   type IMCPBridge,
   type IRVFBridge,
 } from './swarm/orchestrator.js';
+
+/**
+ * Simplified type for the HuggingFace feature-extraction pipeline instance.
+ * The full Awaited<ReturnType<typeof pipeline>> union exceeds tsc's complexity
+ * limit (TS2590). We only ever call the extractor for feature-extraction with
+ * mean pooling, which always returns { data: Float32Array }.
+ */
+type HFExtractor = (text: string, opts: Record<string, unknown>) => Promise<{ data: Float32Array }>;
 
 // ── Flight Recorder (in-memory audit for monitoring) ─────────────────
 
@@ -722,7 +731,7 @@ async function fetchUrlsToFiles(urls: string[]): Promise<FetchedSource[]> {
  */
 async function fireAndAudit(
   text: string,
-  extractor: Awaited<ReturnType<typeof import('@huggingface/transformers').pipeline>>,
+  extractor: HFExtractor,
   scanner: VectorScanner,
   threatState: SessionThreatState,
 ): Promise<void> {
@@ -752,6 +761,44 @@ async function fireAndAudit(
   } catch (err) {
     console.warn('[AsyncAuditor] Error during semantic audit (fail-open):', err);
   }
+}
+
+// ── Phase 21: Semantic Audit Function Factory ─────────────────────────────────
+
+/**
+ * Returns an AuditFn suitable for injection into decontaminate().
+ *
+ * The returned function embeds `chunk` with the ONNX model, runs the
+ * 2-of-3 consensus vote, and returns:
+ *   true  — clean (no consensus → keep this chunk)
+ *   false — contaminated (consensus reached → excise this chunk)
+ *
+ * Fails open on ONNX error so a broken extractor never silently blocks clean text.
+ * Error details are logged so the operator knows the semantic layer is degraded.
+ */
+function makeSemanticAuditFn(
+  extractor: HFExtractor,
+  scanner: VectorScanner,
+): AuditFn {
+  return async (chunk: string): Promise<boolean> => {
+    try {
+      const normalized = scanner.normalizeInput(chunk);
+      const out = await extractor(normalized, { pooling: 'mean', normalize: true }) as { data: Float32Array };
+      const vec = Array.from(out.data);
+
+      const { distances } = await scanner.searchCoherenceDbDistances(vec, 5);
+      const lambda = estimateLambda(distances);
+      const starLambda = localMinCutLambda(distances);
+      const ratioResult = await scanner.partitionRatioScore(vec, 5);
+
+      const consensus = applyConsensusVoting({ ratioResult, lambda, starLambda });
+      // true = clean (keep), false = contaminated (excise or recurse)
+      return !consensus.shouldEscalate;
+    } catch (err) {
+      console.warn('[Surgeon] ONNX audit error (fail-open):', err);
+      return true;
+    }
+  };
 }
 
 // ── Goal Runner (Phase 12a — Option B: Self-Contained) ──────────────
@@ -820,15 +867,14 @@ export async function runGoal(
 
   // ── 0a. Load async auditor (ONNX — supply-chain pinned) ────────────
 
-  const threatState = new SessionThreatState();
-  let extractor: Awaited<ReturnType<typeof import('@huggingface/transformers').pipeline>> | null = null;
+  let extractor: HFExtractor | null = null;
 
   try {
     const { pipeline: hfPipeline, env: hfEnv } = await import('@huggingface/transformers');
     const modelDir = join(process.cwd(), '.claude-flow', 'data', 'models');
     hfEnv.cacheDir = modelDir;
     hfEnv.allowRemoteModels = false;
-    extractor = await hfPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device: 'cpu' });
+    extractor = await hfPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device: 'cpu' }) as unknown as HFExtractor;
     console.log(`[GOAP] Async auditor ready (all-MiniLM-L6-v2, supply-chain pinned)`);
   } catch (err) {
     console.warn(`[GOAP] Async auditor unavailable (fail-open — fast-path gate remains active): ${err}`);
@@ -856,11 +902,36 @@ export async function runGoal(
   const rvfBridge = new LiveRVFBridge(rvfAdapter, scrub);
   await rvfBridge.initialize('bunker.rvf');
 
+  // ── Startup Assertion: clean reference DB must exist ──────────────────
+  // The Airlock (fireAndAudit) requires ruvbot-clean-reference.db for the
+  // partition ratio score discriminant (primary 2-of-3 consensus signal).
+  // Without it, the Mothership falls back to 1-of-2 consensus (λ + star-λ),
+  // which has higher false-positive risk. Refuse to boot rather than silently
+  // degrade — fail-CLOSED on the clean reference invariant.
+  const cleanRefDbPath = join(process.cwd(), '.claude-flow', 'data', 'ruvbot-clean-reference.db');
+  try {
+    await access(cleanRefDbPath);
+  } catch {
+    throw new Error(
+      'STARTUP ASSERTION FAILED: ruvbot-clean-reference.db not found at ' +
+      cleanRefDbPath + '\n' +
+      'Run: npx tsx scripts/seed-clean-reference.ts\n' +
+      'The Airlock requires both databases to operate at full 2-of-3 consensus capacity.',
+    );
+  }
+  console.log(`[GOAP] Clean reference DB found — Airlock 2-of-3 consensus active`);
+
   const scanner = new VectorScanner({
     dbPath: '.claude-flow/data/attack-patterns.db',
     dimensions: 384,
   });
   await scanner.initialize();
+
+  // Build the Surgeon's audit callback (null when ONNX model is unavailable).
+  const semanticAuditFn: AuditFn | null = extractor
+    ? makeSemanticAuditFn(extractor, scanner)
+    : null;
+
   const liveClient = new NeuralLiveMCPClient(cfAdapter.callTool.bind(cfAdapter), scanner);
   const coordinator = new AIDefenceCoordinator({}, liveClient);
   await coordinator.initialize();
@@ -882,10 +953,6 @@ export async function runGoal(
     { taskId: `GOAP-${Date.now()}`, priority: 'high', type: 'research-goal' },
   );
 
-  // Collect async audit promises fired after each fast-path clearance.
-  // All are awaited before PAL receives any data (phase boundary check).
-  const auditPromises: Promise<void>[] = [];
-
   let sanitizedGoal: string;
   try {
     log.totalDispatches++;
@@ -896,12 +963,6 @@ export async function runGoal(
     console.log(`[GOAP] PASSED — Verdict: ${record.defenceResult.verdict}`);
     console.log(`  Content hash: ${record.contentHash}`);
     console.log(`  Latency:      ${record.defenceResult.total_latency_ms.toFixed(2)}ms`);
-
-    // Fire async auditor immediately — runs concurrently while we fetch URLs / prep context.
-    if (extractor) {
-      auditPromises.push(fireAndAudit(goal, extractor, scanner, threatState));
-      console.log(`[GOAP] Async auditor fired for goal (ONNX semantic check running in background)`);
-    }
   } catch (err) {
     if (err instanceof SecurityViolationError) {
       log.totalBlocked++;
@@ -956,11 +1017,24 @@ export async function runGoal(
           console.warn(`[GOAP][ZT] ${source.url} excluded (${reason}) — removed from PAL context`);
           await unlink(source.filePath).catch(() => {});
         } else {
-          ztSafe.push(source);
-          // Fire async auditor on each ZT-cleared source (semantic check before PAL context)
-          if (extractor) {
-            auditPromises.push(fireAndAudit(content, extractor, scanner, threatState));
+          // Semantic decontamination: surgically excise any contaminated chunks
+          // before this source is allowed into PAL context.
+          if (semanticAuditFn) {
+            const srcResult = await decontaminate(content, semanticAuditFn);
+            if (!srcResult.isClean) {
+              for (const entry of srcResult.manifest) {
+                console.warn(`[Surgeon][ZT] ${source.url}: ${entry.reason}`);
+              }
+              if (srcResult.cleanText === '') {
+                console.warn(`[Surgeon][ZT] ${source.url} entirely contaminated — excluded from PAL context`);
+                await unlink(source.filePath).catch(() => {});
+                continue; // skip ztSafe.push — source removed entirely
+              }
+              await writeFile(source.filePath, srcResult.cleanText, 'utf-8');
+              console.warn(`[Surgeon][ZT] ${source.url} — ${srcResult.manifest.length} redaction(s) applied, file updated`);
+            }
           }
+          ztSafe.push(source);
         }
       }
       fetchedSources.length = 0;
@@ -1019,25 +1093,37 @@ export async function runGoal(
       ].join('\n')
     : '';
 
-  // ── 3c. Phase boundary: await all async auditors before PAL ─────────
-  // The fast-path gate cleared the payload in ≤5ms. The ONNX semantic auditor
-  // ran concurrently (~30-100ms). We block here to ensure the semantic verdict
-  // is available before any data reaches PAL.
+  // ── 3c. Phase boundary: Surgeon decontaminates goal before PAL ───────
+  // The Airlock is no longer passive: decontaminate() awaits and replaces the
+  // payload with surgically cleaned text. A goal reduced to empty string aborts
+  // the pipeline — nothing reaches PAL from an entirely contaminated request.
+  if (semanticAuditFn) {
+    console.log(`\n[GOAP] === PHASE BOUNDARY: SEMANTIC DECONTAMINATION (goal) ===`);
+    const goalResult = await decontaminate(sanitizedGoal, semanticAuditFn);
 
-  if (auditPromises.length > 0) {
-    console.log(`\n[GOAP] === PHASE BOUNDARY: AWAITING SEMANTIC AUDIT (${auditPromises.length} check(s)) ===`);
-    await Promise.all(auditPromises);
-    if (threatState.escalated) {
-      console.error(`[GOAP] ABORT — Semantic auditor escalated: ${threatState.reason}`);
-      console.error(`[GOAP] Pipeline terminated before PAL received any data.`);
-      await orchestrator.shutdown();
-      await cfAdapter.disconnect();
-      await rvfAdapter.disconnect();
-      await palAdapter.disconnect();
-      log.elapsedMs = performance.now() - t0;
-      return log;
+    if (!goalResult.isClean) {
+      for (const entry of goalResult.manifest) {
+        console.warn(`[Surgeon] Goal chunk excised: ${entry.reason}`);
+        for (const chunk of entry.redactedChunks) {
+          console.warn(`[Surgeon]   ↳ "${chunk.slice(0, 80)}${chunk.length > 80 ? '…' : ''}"`);
+        }
+      }
+
+      if (goalResult.cleanText === '') {
+        console.error(`[GOAP] ABORT — Goal entirely contaminated (${goalResult.manifest.length} chunk(s) excised, nothing remained).`);
+        await orchestrator.shutdown();
+        await cfAdapter.disconnect();
+        await rvfAdapter.disconnect();
+        await palAdapter.disconnect();
+        log.elapsedMs = performance.now() - t0;
+        return log;
+      }
+
+      sanitizedGoal = goalResult.cleanText;
+      console.warn(`[Surgeon] Goal sanitized — ${goalResult.manifest.length} redaction(s) applied, pipeline continues with clean text`);
+    } else {
+      console.log(`[Surgeon] Goal: CLEAN — no redactions needed`);
     }
-    console.log(`[GOAP] Semantic audit PASSED — pipeline continuing to PAL`);
   }
 
   // ── 4. PAL Chat: research with file-based context ───────────────────

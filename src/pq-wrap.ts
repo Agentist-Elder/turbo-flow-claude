@@ -153,7 +153,8 @@ export async function wrapDocument(
   };
 
   // Sign the canonical JSON bytes — deterministic across runtimes
-  const manifestCanonical = canonicalJson(manifest);
+  // WrapManifest is all-string fields; cast is safe.
+  const manifestCanonical = canonicalJson(manifest as unknown as Record<string, string>);
   const msgBytes = new TextEncoder().encode(manifestCanonical);
   const sigBytes = ml_dsa65.sign(msgBytes, keypair.secretKey);
 
