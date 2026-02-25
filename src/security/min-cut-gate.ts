@@ -233,6 +233,69 @@ export class SessionThreatState {
   }
 }
 
+// ── Consensus Voting ──────────────────────────────────────────────────────────
+
+export interface ConsensusInput {
+  /** Result from partitionRatioScore(); null when clean-reference DB is absent. */
+  ratioResult: { ratio: number; d_attack: number; d_clean: number } | null;
+  /** Lambda-avg from estimateLambda(knnDistances). */
+  lambda: number;
+  /** Star-lambda from localMinCutLambda(knnDistances). */
+  starLambda: number;
+}
+
+export interface ConsensusResult {
+  votes: string[];
+  totalDiscriminants: number;
+  consensusThreshold: number;
+  shouldEscalate: boolean;
+  /** True when at least one vote was cast but consensus threshold was not reached. */
+  smokeOnly: boolean;
+}
+
+/**
+ * Pure 2-of-3 consensus vote-counting for the async auditor.
+ *
+ * Exported for unit testing. Called by fireAndAudit() in main.ts.
+ *
+ * When clean-ref DB is present  (ratioResult !== null):
+ *   totalDiscriminants = 3, consensusThreshold = 2 (2-of-3 required).
+ * When clean-ref DB is absent   (ratioResult === null):
+ *   totalDiscriminants = 2, consensusThreshold = 1 (1-of-2, original fallback).
+ *
+ * The ratio acts as a sensitive "smoke detector" (threshold 1.0). Escalation
+ * requires corroboration from λ-avg or star-λ to prevent false positives on
+ * educational security content (confirmed Sensitivity Stress Test 2026-02-25).
+ */
+export function applyConsensusVoting(input: ConsensusInput): ConsensusResult {
+  const { ratioResult, lambda, starLambda } = input;
+  const votes: string[] = [];
+
+  if (ratioResult !== null && ratioResult.ratio > PARTITION_RATIO_THRESHOLD) {
+    votes.push(`ratio=${ratioResult.ratio.toFixed(3)}>${PARTITION_RATIO_THRESHOLD}`);
+  }
+  if (lambda >= SEMANTIC_COHERENCE_THRESHOLD) {
+    votes.push(`λ=${lambda.toFixed(2)}≥${SEMANTIC_COHERENCE_THRESHOLD}`);
+  }
+  if (starLambda >= STAR_MINCUT_THRESHOLD) {
+    votes.push(`star-λ=${starLambda.toFixed(3)}≥${STAR_MINCUT_THRESHOLD}`);
+  }
+
+  const totalDiscriminants = ratioResult !== null ? 3 : 2;
+  const consensusThreshold = ratioResult !== null ? 2 : 1;
+  const shouldEscalate = votes.length >= consensusThreshold;
+
+  return {
+    votes,
+    totalDiscriminants,
+    consensusThreshold,
+    shouldEscalate,
+    smokeOnly: votes.length > 0 && !shouldEscalate,
+  };
+}
+
+// ── Gate Execution ────────────────────────────────────────────────────────────
+
 export async function runGate(
   decision: GateDecision,
   l3Verdict: L3Verdict,

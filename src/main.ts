@@ -27,10 +27,8 @@ import { MCPTransportAdapter, createClaudeFlowTransport } from './security/mcp-t
 import { VectorScanner } from './security/vector-scanner.js';
 import {
   SessionThreatState,
-  SEMANTIC_COHERENCE_THRESHOLD,
-  PARTITION_RATIO_THRESHOLD,
-  STAR_MINCUT_THRESHOLD,
   estimateLambda,
+  applyConsensusVoting,
 } from './security/min-cut-gate.js';
 import { localMinCutLambda } from './security/stoer-wagner.js';
 import {
@@ -741,30 +739,15 @@ async function fireAndAudit(
     // Step 2: partition ratio (requires both DBs; null when clean-ref DB is absent).
     const ratioResult = await scanner.partitionRatioScore(vec, 5);
 
-    // Step 3: count votes.
-    const votes: string[] = [];
-    if (ratioResult !== null && ratioResult.ratio > PARTITION_RATIO_THRESHOLD) {
-      votes.push(`ratio=${ratioResult.ratio.toFixed(3)}>${PARTITION_RATIO_THRESHOLD}`);
-    }
-    if (lambda >= SEMANTIC_COHERENCE_THRESHOLD) {
-      votes.push(`λ=${lambda.toFixed(2)}≥${SEMANTIC_COHERENCE_THRESHOLD}`);
-    }
-    if (starLambda >= STAR_MINCUT_THRESHOLD) {
-      votes.push(`star-λ=${starLambda.toFixed(3)}≥${STAR_MINCUT_THRESHOLD}`);
-    }
+    // Steps 3+4: count votes and apply consensus threshold (pure logic in min-cut-gate.ts).
+    const consensus = applyConsensusVoting({ ratioResult, lambda, starLambda });
 
-    // Step 4: apply consensus threshold.
-    // 3 discriminants available (clean DB present) → require ≥ 2 votes to escalate.
-    // 2 discriminants available (clean DB absent)  → require ≥ 1 (original fallback behaviour).
-    const totalDiscriminants = ratioResult !== null ? 3 : 2;
-    const consensusThreshold = ratioResult !== null ? 2 : 1;
-
-    if (votes.length >= consensusThreshold) {
-      const msg = `Async semantic audit: consensus ${votes.length}/${totalDiscriminants} — ${votes.join(', ')}`;
+    if (consensus.shouldEscalate) {
+      const msg = `Async semantic audit: consensus ${consensus.votes.length}/${consensus.totalDiscriminants} — ${consensus.votes.join(', ')}`;
       threatState.escalate(msg);
       console.warn(`[AsyncAuditor] ESCALATED — ${msg}`);
-    } else if (votes.length > 0) {
-      console.log(`[AsyncAuditor] Smoke detected (${votes.length}/${totalDiscriminants} votes, below consensus): ${votes.join(', ')}`);
+    } else if (consensus.smokeOnly) {
+      console.log(`[AsyncAuditor] Smoke detected (${consensus.votes.length}/${consensus.totalDiscriminants} votes, below consensus): ${consensus.votes.join(', ')}`);
     }
   } catch (err) {
     console.warn('[AsyncAuditor] Error during semantic audit (fail-open):', err);
