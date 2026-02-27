@@ -8,8 +8,13 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-rvf-memory-physics = { path = "../rvf-memory-physics" }
-wasm-rpc-client = { path = "../wasm-rpc-client" }
+rvf-memory-physics       = { path = "../rvf-memory-physics" }
+wasm-rpc-client          = { path = "../wasm-rpc-client" }
 flatbuffers-schemas-rust = { path = "../flatbuffers-schemas-rust" }
+flatbuffers              = "23.5.26"
+# ED25519 verification only — no signing, no getrandom dependency.
+ed25519-dalek            = { version = "2", default-features = false, features = ["alloc"] }
+# XXH3 for origin identity tokens (key_hash derivation).
+xxhash-rust              = { version = "0.8", features = ["xxh3"] }
 
 # profile.release defined at workspace root Cargo.toml

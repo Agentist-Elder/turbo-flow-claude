@@ -2,9 +2,9 @@
 // This file defines all messages entering and leaving the deterministic WASM sandbox.
 // The gate is default-deny and never learns natively; adaptations arrive via SignatureUpdate.
 
-namespace mothership.wasm_gate;
-
 include "common.fbs";
+
+namespace mothership.wasm_gate;
 
 // ---------------------------------------------------------------------------
 // Enumerations
@@ -40,27 +40,27 @@ struct ProbabilisticFingerprint {
 /// The domain_context enables the gate to tag the request's semantic domain for
 /// downstream threat-intelligence transfer by System 2.
 table SecurityRequest {
-  request_id    : uint64;
-  caller_did    : [ubyte];                              // XXH3 of DID document (compact, no URI string)
+  request_id     : uint64;
+  caller_did     : [ubyte];                              // XXH3 of DID document (compact, no URI string)
   payload_digest : mothership.common.Xxh3Digest;        // XXH3-128 of the request payload
-  provenance    : mothership.common.ProvenanceRecord;   // ED25519 origin proof
+  provenance     : mothership.common.ProvenanceRecord;  // ED25519 origin proof
   domain_context : mothership.common.DomainContext;     // Semantic domain classification
-  fingerprint   : ProbabilisticFingerprint;             // Inline — zero heap alloc
-  timestamp_ns  : uint64;
+  fingerprint    : ProbabilisticFingerprint;            // Inline — zero heap alloc
+  timestamp_ns   : uint64;
 }
 
 /// Outbound security evaluation response.
 /// reasoning_code is a compact internal status code; no string allocation in WASM.
 /// The witness_entry appends this decision to the RVF Witness Chain.
 table SecurityResponse {
-  request_id    : uint64;
-  decision      : PolicyDecision;
-  threat_level  : mothership.common.ThreatLevel;
-  provenance    : mothership.common.ProvenanceRecord;
+  request_id     : uint64;
+  decision       : PolicyDecision;
+  threat_level   : mothership.common.ThreatLevel;
+  provenance     : mothership.common.ProvenanceRecord;
   domain_context : mothership.common.DomainContext;
   reasoning_code : uint16;                             // Internal code table; never a string
-  processing_ns : uint64;
-  witness_entry : mothership.common.WitnessEntry;
+  processing_ns  : uint64;
+  witness_entry  : mothership.common.WitnessEntry;
 }
 
 /// Signature update pushed by System 2 to patch System 1's fingerprint model.

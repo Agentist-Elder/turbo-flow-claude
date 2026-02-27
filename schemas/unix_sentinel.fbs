@@ -3,9 +3,9 @@
 // countermeasures. All analysis vectors use the same 768-dim ONNX embedding space
 // as the existing ruvbot-coherence.db and ruvbot-clean-reference.db corpora.
 
-namespace mothership.sentinel;
-
 include "common.fbs";
+
+namespace mothership.sentinel;
 
 // ---------------------------------------------------------------------------
 // Enumerations
@@ -13,20 +13,20 @@ include "common.fbs";
 
 /// Behavioural classification output by the sentinel's anomaly detector.
 enum BehaviorClass : uint8 {
-  Normal    = 0,
-  Anomalous = 1,
+  Normal     = 0,
+  Anomalous  = 1,
   Suspicious = 2,
   Malicious  = 3,
 }
 
 /// The type of countermeasure the sentinel orders after a behavioural evaluation.
 enum CountermeasureType : uint8 {
-  None               = 0,
-  RateLimitIncrease  = 1,
-  SignaturePatch     = 2,   // Pushes a SignatureUpdate to System 1
-  PolicyTighten      = 3,
-  CircuitBreak       = 4,
-  Escalate           = 5,   // Hands off to System 3
+  None              = 0,
+  RateLimitIncrease = 1,
+  SignaturePatch    = 2,   // Pushes a SignatureUpdate to System 1
+  PolicyTighten     = 3,
+  CircuitBreak      = 4,
+  Escalate          = 5,   // Hands off to System 3
 }
 
 // ---------------------------------------------------------------------------

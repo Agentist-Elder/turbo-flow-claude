@@ -8,3 +8,4 @@ name = "flatbuffers_schemas_rust"
 path = "src/lib.rs"
 
 [dependencies]
+flatbuffers = "23.5.26"
