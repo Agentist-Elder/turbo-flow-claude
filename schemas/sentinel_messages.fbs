@@ -1,5 +1,0 @@
-// sentinel_messages.fbs — Unix Adaptive Sentinel message contracts
-// Messages specific to System 2 interactions
-// TODO: Define ThreatReport, BehaviorEvaluation, CountermeasureDirective tables
-
-namespace mothership.sentinel;

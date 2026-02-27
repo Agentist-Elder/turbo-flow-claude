@@ -1,0 +1,91 @@
+// unix_sentinel.fbs — System 2: Unix Adaptive Sentinel message contracts
+// The sentinel monitors system behaviour, synthesises LoRA patches, and orchestrates
+// countermeasures. All analysis vectors use the same 768-dim ONNX embedding space
+// as the existing ruvbot-coherence.db and ruvbot-clean-reference.db corpora.
+
+namespace mothership.sentinel;
+
+include "common.fbs";
+
+// ---------------------------------------------------------------------------
+// Enumerations
+// ---------------------------------------------------------------------------
+
+/// Behavioural classification output by the sentinel's anomaly detector.
+enum BehaviorClass : uint8 {
+  Normal    = 0,
+  Anomalous = 1,
+  Suspicious = 2,
+  Malicious  = 3,
+}
+
+/// The type of countermeasure the sentinel orders after a behavioural evaluation.
+enum CountermeasureType : uint8 {
+  None               = 0,
+  RateLimitIncrease  = 1,
+  SignaturePatch     = 2,   // Pushes a SignatureUpdate to System 1
+  PolicyTighten      = 3,
+  CircuitBreak       = 4,
+  Escalate           = 5,   // Hands off to System 3
+}
+
+// ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+
+/// Inbound threat report — originated by System 1 or an internal sentinel sensor.
+/// raw_features carries the ONNX embedding of the triggering payload for LoRA inference.
+/// The domain_context field enables cross-domain transfer: a financial-fraud signal can
+/// inform a network-security model via the DomainId transfer_score.
+table ThreatReport {
+  report_id      : uint64;
+  source_system  : mothership.common.SystemId;
+  threat_level   : mothership.common.ThreatLevel;
+  behavior_class : BehaviorClass;
+  domain_context : mothership.common.DomainContext;    // Source domain + embedding for transfer
+  provenance     : mothership.common.ProvenanceRecord; // ED25519 proof from originating system
+  raw_features   : [float32];                          // 768-dim ONNX embedding of the trigger
+  timestamp_ns   : uint64;
+  sequence_id    : uint64;                             // Monotonic within source_system
+}
+
+/// Behavioural evaluation result produced by the sentinel's inference pipeline.
+/// lambda_estimate and partition_ratio expose the Stoer-Wagner and partitionRatioScore
+/// discriminants for observability (matches existing async-auditor architecture).
+table BehaviorEvaluation {
+  report_id       : uint64;
+  behavior_class  : BehaviorClass;
+  threat_level    : mothership.common.ThreatLevel;
+  domain_context  : mothership.common.DomainContext;
+  anomaly_score   : float32;
+  lambda_estimate : float32;   // Stoer-Wagner λ; threshold = 2.0 (SEMANTIC_COHERENCE_THRESHOLD)
+  partition_ratio : float32;   // partitionRatioScore; ratio > 1.0 triggers escalation
+  star_lambda     : float32;   // localMinCutLambda; threshold = 0.40 (STAR_MINCUT_THRESHOLD)
+  provenance      : mothership.common.ProvenanceRecord;
+}
+
+/// Directive issued by the sentinel to a target system.
+/// lora_patch_payload carries a serialised LoRA weight delta when
+/// countermeasure = SignaturePatch (zero bytes otherwise).
+table CountermeasureDirective {
+  directive_id       : uint64;
+  target_system      : mothership.common.SystemId;
+  countermeasure     : CountermeasureType;
+  lora_patch_payload : [ubyte];                         // LoRA weight delta; 0-length if unused
+  domain_context     : mothership.common.DomainContext;
+  provenance         : mothership.common.ProvenanceRecord;
+  effective_at_ns    : uint64;
+}
+
+/// A single entry for the ruvector coherence/clean-reference corpus.
+/// Stored persistently in ruvbot-coherence.db or ruvbot-clean-reference.db.
+/// The domain_context enables the planned dynamic clean-traffic capture backlog item.
+table CorpusEntry {
+  entry_id       : uint64;
+  domain_context : mothership.common.DomainContext;
+  embedding      : [float32];                          // 768-dim ONNX vector
+  is_clean       : bool;                               // false = attack, true = clean reference
+  provenance     : mothership.common.ProvenanceRecord;
+}
+
+root_type ThreatReport;

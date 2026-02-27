@@ -1,5 +1,110 @@
-// l3_gateway.fbs — L3 API Gateway message contracts
-// Messages specific to System 3 / Layer-3 orchestration interactions
-// TODO: Define GatewayRequest, GatewayResponse, RouteConfig tables
+// l3_gateway.fbs — System 3: Layer-3 API Gateway Orchestration message contracts
+// The gateway is stateless, handles auth/authz/rate-limiting, and routes to
+// dedicated AI security microservices (Shield, Policy Engine, neural-trader MCP).
+// ADR-026 3-tier model routing tiers are encoded in RouteConfig.tier.
 
 namespace mothership.gateway;
+
+include "common.fbs";
+
+// ---------------------------------------------------------------------------
+// Enumerations
+// ---------------------------------------------------------------------------
+
+/// HTTP method — enum keeps it to 1 byte, avoids string comparison in hot path.
+enum HttpMethod : uint8 {
+  GET    = 0,
+  POST   = 1,
+  PUT    = 2,
+  PATCH  = 3,
+  DELETE = 4,
+}
+
+/// Upstream service target — compact routing key replacing URL strings.
+enum ServiceTarget : uint8 {
+  ShieldService  = 0,
+  PolicyEngine   = 1,
+  ThreatIntel    = 2,
+  AuditLog       = 3,
+  NeuralTrader   = 4,   // MCP neural-trader (System 3 Operator)
+  SentinelRelay  = 5,   // Relay to System 2
+  WasmGateRelay  = 6,   // Relay to System 1
+}
+
+/// Authentication scheme in use for an inbound request.
+enum AuthScheme : uint8 {
+  None       = 0,
+  BearerToken = 1,
+  MutualTLS  = 2,
+  ApiKey     = 3,
+}
+
+// ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+
+/// Compact HTTP header representation.
+/// key_code is an internal enum value; value is the raw header bytes.
+/// Avoids string key allocation on the hot-path.
+table HeaderEntry {
+  key_code : uint16;
+  value    : [ubyte];
+}
+
+/// Inbound gateway request.
+/// path_hash is XXH3-64 of the URL path — never store raw URL strings in the message.
+/// The domain_context enables the gateway to tag requests for downstream
+/// threat-intelligence transfer and model routing (ADR-026 tier selection).
+table GatewayRequest {
+  request_id         : uint64;
+  method             : HttpMethod;
+  path_hash          : uint64;                             // XXH3-64 of URL path; no string alloc
+  target_service     : ServiceTarget;
+  auth_scheme        : AuthScheme;
+  auth_token_digest  : mothership.common.Xxh3Digest;       // XXH3-128 of bearer token/API key
+  headers            : [HeaderEntry];
+  body               : [ubyte];
+  domain_context     : mothership.common.DomainContext;    // Domain-expansion classification
+  provenance         : mothership.common.ProvenanceRecord; // ED25519 origin proof
+  timestamp_ns       : uint64;
+}
+
+/// Outbound gateway response.
+/// status_code is the numeric HTTP status (200, 403, 429, etc.).
+table GatewayResponse {
+  request_id         : uint64;
+  status_code        : uint16;
+  status             : mothership.common.RequestStatus;
+  headers            : [HeaderEntry];
+  body               : [ubyte];
+  domain_context     : mothership.common.DomainContext;
+  provenance         : mothership.common.ProvenanceRecord;
+  processing_ns      : uint64;
+  upstream_latency_ns : uint64;
+}
+
+/// Routing configuration for a service target.
+/// tier encodes the ADR-026 3-tier model routing decision:
+///   1 = WASM Booster (<1 ms, no LLM)
+///   2 = Haiku        (~500 ms, simple tasks)
+///   3 = Sonnet/Opus  (2–5 s, complex reasoning)
+table RouteConfig {
+  service                  : ServiceTarget;
+  tier                     : uint8;          // ADR-026 tier: 1, 2, or 3
+  timeout_ns               : uint64;
+  max_retries              : uint8;
+  circuit_break_threshold  : float32;        // Error rate [0.0–1.0] that opens the circuit
+  domain_context           : mothership.common.DomainContext;
+}
+
+/// Rate-limit ledger entry keyed by client fingerprint.
+/// client_fingerprint is XXH3-128 of (IP ‖ auth_token_digest) — no PII string stored.
+table RateLimitEntry {
+  client_fingerprint : mothership.common.Xxh3Digest;
+  window_start_ns    : uint64;
+  request_count      : uint32;
+  max_requests       : uint32;
+  blocked            : bool;
+}
+
+root_type GatewayRequest;

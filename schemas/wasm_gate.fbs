@@ -1,0 +1,77 @@
+// wasm_gate.fbs — System 1: WASM Security Gate message contracts
+// This file defines all messages entering and leaving the deterministic WASM sandbox.
+// The gate is default-deny and never learns natively; adaptations arrive via SignatureUpdate.
+
+namespace mothership.wasm_gate;
+
+include "common.fbs";
+
+// ---------------------------------------------------------------------------
+// Enumerations
+// ---------------------------------------------------------------------------
+
+/// Policy decision for an incoming security request.
+enum PolicyDecision : uint8 {
+  Allow      = 0,
+  Deny       = 1,
+  Challenge  = 2,   // Require additional proof-of-work or re-authentication
+  Quarantine = 3,   // Isolate caller and escalate to System 2
+}
+
+// ---------------------------------------------------------------------------
+// Fixed-size structs — inline storage, no heap allocation inside WASM
+// ---------------------------------------------------------------------------
+
+/// Probabilistic fingerprint bucket array (32 bytes = 4 × uint64).
+/// Used for constant-time membership checking without dynamic memory.
+struct ProbabilisticFingerprint {
+  bucket0 : uint64;
+  bucket1 : uint64;
+  bucket2 : uint64;
+  bucket3 : uint64;
+}
+
+// ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+
+/// Inbound security evaluation request.
+/// The caller_did field holds a DID document hash (variable-length; DID formats differ).
+/// The domain_context enables the gate to tag the request's semantic domain for
+/// downstream threat-intelligence transfer by System 2.
+table SecurityRequest {
+  request_id    : uint64;
+  caller_did    : [ubyte];                              // XXH3 of DID document (compact, no URI string)
+  payload_digest : mothership.common.Xxh3Digest;        // XXH3-128 of the request payload
+  provenance    : mothership.common.ProvenanceRecord;   // ED25519 origin proof
+  domain_context : mothership.common.DomainContext;     // Semantic domain classification
+  fingerprint   : ProbabilisticFingerprint;             // Inline — zero heap alloc
+  timestamp_ns  : uint64;
+}
+
+/// Outbound security evaluation response.
+/// reasoning_code is a compact internal status code; no string allocation in WASM.
+/// The witness_entry appends this decision to the RVF Witness Chain.
+table SecurityResponse {
+  request_id    : uint64;
+  decision      : PolicyDecision;
+  threat_level  : mothership.common.ThreatLevel;
+  provenance    : mothership.common.ProvenanceRecord;
+  domain_context : mothership.common.DomainContext;
+  reasoning_code : uint16;                             // Internal code table; never a string
+  processing_ns : uint64;
+  witness_entry : mothership.common.WitnessEntry;
+}
+
+/// Signature update pushed by System 2 to patch System 1's fingerprint model.
+/// This is the only mechanism by which System 1 "learns" — always externally driven.
+/// The domain_context indicates which threat domain prompted this update.
+table SignatureUpdate {
+  update_id      : uint64;
+  new_signatures : [ProbabilisticFingerprint];          // Replacement fingerprint set
+  domain_context : mothership.common.DomainContext;     // Domain-expansion context
+  provenance     : mothership.common.ProvenanceRecord;  // ED25519 proof from System 2
+  applied_height : uint64;                              // Witness chain height at application
+}
+
+root_type SecurityRequest;

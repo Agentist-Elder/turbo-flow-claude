@@ -1,5 +1,0 @@
-// security_gate.fbs — WASM Security Gate message contracts
-// Messages specific to System 1 interactions
-// TODO: Define SecurityRequest, SecurityResponse, PolicyResult tables
-
-namespace mothership.security;

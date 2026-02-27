@@ -1,0 +1,132 @@
+// common.fbs — Shared base types for the Mothership Tri-System
+// All other schemas include this file.
+// Compile: flatc --rust -o crates/flatbuffers-schemas-rust/src schemas/common.fbs
+//          flatc --ts   -o packages/flatbuffers-schemas-ts/src  schemas/common.fbs
+
+namespace mothership.common;
+
+// ---------------------------------------------------------------------------
+// Enumerations — use enums wherever a string would work; enums are 1–2 bytes
+// ---------------------------------------------------------------------------
+
+/// Identifies which system produced or consumed a message.
+enum SystemId : uint8 {
+  Unknown               = 0,
+  WasmSecurityGate      = 1,   // System 1 — deterministic WASM sandbox
+  UnixAdaptiveSentinel  = 2,   // System 2 — native threat hunter
+  L3ApiGateway          = 3,   // System 3 — stateless HTTP orchestrator
+}
+
+/// Severity classification for threats and policy decisions.
+enum ThreatLevel : uint8 {
+  None     = 0,
+  Low      = 1,
+  Medium   = 2,
+  High     = 3,
+  Critical = 4,
+}
+
+/// Outcome status for RPC calls and gateway responses.
+enum RequestStatus : uint8 {
+  Pending   = 0,
+  Approved  = 1,
+  Denied    = 2,
+  Escalated = 3,
+  Timeout   = 4,
+}
+
+/// Serialisation format used at a boundary crossing.
+/// JSON is strictly forbidden at the WASM/Unix boundary (ADR-026).
+enum TransportEncoding : uint8 {
+  FlatBuffers = 0,
+  MessagePack = 1,
+}
+
+/// Semantic domain identifier — used for cross-domain threat-intel transfer.
+enum DomainId : uint8 {
+  Unknown              = 0,
+  FinancialTransactions = 1,
+  ThreatIntelligence   = 2,
+  NetworkSecurity      = 3,
+  DataExfiltration     = 4,
+  SocialEngineering    = 5,
+  MalwareSignatures    = 6,
+  PrivilegeEscalation  = 7,
+  SupplyChain          = 8,
+}
+
+// ---------------------------------------------------------------------------
+// Fixed-size structs — zero heap allocation, stored inline inside tables.
+// All sizes are annotated for auditors.
+// ---------------------------------------------------------------------------
+
+/// XXH3-128 content digest (16 bytes).
+struct Xxh3Digest {
+  lo : uint64;   // low  64 bits
+  hi : uint64;   // high 64 bits
+}
+
+/// ED25519 public key (32 bytes = 4 × uint64).
+/// Vulnerability flag: do NOT use XXH3 alone for origin verification;
+/// this key authenticates the originating system via ED25519.
+struct Ed25519PublicKey {
+  b0 : uint64;
+  b1 : uint64;
+  b2 : uint64;
+  b3 : uint64;
+}
+
+/// ED25519 signature over (content_digest ‖ timestamp_ns) (64 bytes = 8 × uint64).
+/// Required on every provenance-bearing message per Ruv security advisory.
+struct Ed25519Signature {
+  b0 : uint64;
+  b1 : uint64;
+  b2 : uint64;
+  b3 : uint64;
+  b4 : uint64;
+  b5 : uint64;
+  b6 : uint64;
+  b7 : uint64;
+}
+
+// ---------------------------------------------------------------------------
+// Tables — variable-size, extendable, cross-message reference types.
+// ---------------------------------------------------------------------------
+
+/// Cryptographic provenance record — attaches to every artifact and state change.
+/// The signature authenticates the XXH3 content digest; the post-quantum wrapper
+/// is applied at the pq-wrap transport layer and is not repeated here.
+table ProvenanceRecord {
+  origin_system        : SystemId;
+  content_digest       : Xxh3Digest;    // XXH3-128 of the enclosed payload
+  signature            : Ed25519Signature;  // ED25519 over (digest ‖ timestamp_ns)
+  public_key           : Ed25519PublicKey;
+  timestamp_ns         : uint64;        // Monotonic nanoseconds at signing time
+  witness_chain_height : uint64;        // Current append-only chain head height
+}
+
+/// Domain-expansion context — enables ruvector LoRA transfer between semantic domains.
+/// The embedding vector (768-dim, float32, ONNX space) drives cosine similarity routing.
+/// Pi-derived quantisation: callers MUST scale threshold comparisons by π to prevent
+/// binary harmonic resonance drift in continuous deterministic memory.
+table DomainContext {
+  source_domain   : DomainId;
+  target_domain   : DomainId;
+  embedding       : [float32];   // 768-element ONNX embedding vector
+  confidence      : float32;     // Model confidence in source classification
+  transfer_score  : float32;     // Cosine similarity between domain embeddings
+}
+
+/// Single entry in the append-only RVF Witness Chain.
+/// Signed by the authoring system; the pq_signature field carries the
+/// post-quantum wrapper from the Decoupled Hardware CA (optional at chain bootstrap).
+table WitnessEntry {
+  height         : uint64;
+  prev_digest    : Xxh3Digest;        // XXH3-128 of the previous entry
+  payload_digest : Xxh3Digest;        // XXH3-128 of the event payload
+  signature      : Ed25519Signature;  // ED25519 over (prev_digest ‖ payload_digest ‖ height)
+  public_key     : Ed25519PublicKey;
+  timestamp_ns   : uint64;
+  author         : SystemId;
+  pq_signature   : [ubyte];           // Optional: post-quantum wrapper (Decoupled Hardware CA)
+}

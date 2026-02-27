@@ -1,0 +1,67 @@
+// rpc_bridge.fbs — FlatBuffers WASM-to-Unix RPC bridge envelope
+// Governs ALL cross-boundary calls between System 1 (WASM) and Systems 2/3 (Unix).
+// JSON is forbidden across this boundary (ADR-026). Use FlatBuffers or MessagePack only.
+// Include path: compile from /schemas/ root.
+
+namespace mothership.rpc;
+
+include "common.fbs";
+
+// ---------------------------------------------------------------------------
+// Enumerations
+// ---------------------------------------------------------------------------
+
+/// Direction of a cross-boundary call.
+enum RpcDirection : uint8 {
+  WasmToUnix = 0,
+  UnixToWasm = 1,
+}
+
+/// Compact method identifier replaces string-based method names (no heap alloc in WASM).
+/// Ranges:   1–99   System 1 → Unix outbound calls
+///           100–199 System 2 patches into System 1
+///           200–299 Escalation path to System 3
+enum RpcMethod : uint16 {
+  // System 1 (WASM) → System 2 (Unix) calls
+  ReportThreat          = 1,
+  RequestPolicyQuery    = 2,
+  RequestPatch          = 3,
+  LogWitnessEntry       = 4,
+
+  // System 2 (Unix) → System 1 (WASM) calls — LoRA patches and policy updates
+  PushSignatureUpdate   = 100,
+  PushPolicyUpdate      = 101,
+  FlushFingerprints     = 102,
+
+  // Any system → System 3 (L3 Gateway) escalation
+  EscalateToGateway     = 200,
+  AuditLog              = 201,
+  DomainTransferRequest = 202,
+}
+
+// ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+
+/// Outbound RPC call envelope. The payload field carries a nested FlatBuffers
+/// message appropriate to the method (e.g. SecurityRequest, ThreatReport).
+table RpcCallRequest {
+  call_id     : uint64;                             // Caller-assigned monotonic ID
+  method      : RpcMethod;
+  direction   : RpcDirection;
+  payload     : [ubyte];                            // Serialised FlatBuffers sub-message
+  provenance  : mothership.common.ProvenanceRecord; // ED25519-signed origin proof
+  deadline_ns : uint64;                             // Absolute monotonic deadline
+}
+
+/// Response envelope. The call_id echoes the originating request.
+table RpcCallResponse {
+  call_id          : uint64;
+  status           : mothership.common.RequestStatus;
+  payload          : [ubyte];                            // Serialised FlatBuffers sub-message
+  provenance       : mothership.common.ProvenanceRecord;
+  latency_ns       : uint64;                             // Wall time spent in handler
+  error_code       : uint16;                             // 0 = success; compact, no string
+}
+
+root_type RpcCallRequest;
