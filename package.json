@@ -2,10 +2,19 @@
   "name": "turbo-flow-claude",
   "version": "0.1.0",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "generate:flatbuffers": "flatc --rust -o crates/flatbuffers-schemas-rust/src schemas/*.fbs && flatc --ts -o packages/flatbuffers-schemas-ts/src schemas/*.fbs",
+    "build:rust-libs": "cargo build --workspace --release",
+    "build:wasm-security-gate": "cd crates/wasm-security-gate && cargo build --target wasm32-unknown-unknown --release",
+    "build:rvf-node-addon": "cd packages/rvf-memory-physics-node/rust && cargo build --release",
+    "build:mothership": "npm run generate:flatbuffers && npm run build:rust-libs && npm run build:wasm-security-gate && npm run build:rvf-node-addon"
   },
   "dependencies": {
     "@claude-flow/plugin-agentic-qe": "^3.0.0-alpha.4",

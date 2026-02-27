@@ -1,0 +1,17 @@
+{
+  "name": "@mothership/unix-adaptive-sentinel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@mothership/host-rpc-server": "*",
+    "@mothership/rvf-memory-physics-node": "*",
+    "@mothership/flatbuffers-schemas-ts": "*",
+    "@mothership/common-types": "*"
+  }
+}

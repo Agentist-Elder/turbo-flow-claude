@@ -1,0 +1,7 @@
+// rpc_messages.fbs — Common RPC request/response structures
+// Single source of truth for WASM-to-Unix bridge message contracts
+// Compile with: flatc --rust -o crates/flatbuffers-schemas-rust/src schemas/rpc_messages.fbs
+//               flatc --ts   -o packages/flatbuffers-schemas-ts/src  schemas/rpc_messages.fbs
+// TODO: Define RPC envelope, call/response tables
+
+namespace mothership.rpc;

@@ -1,0 +1,15 @@
+[package]
+name = "wasm-security-gate"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+rvf-memory-physics = { path = "../rvf-memory-physics" }
+wasm-rpc-client = { path = "../wasm-rpc-client" }
+flatbuffers-schemas-rust = { path = "../flatbuffers-schemas-rust" }
+
+# profile.release defined at workspace root Cargo.toml

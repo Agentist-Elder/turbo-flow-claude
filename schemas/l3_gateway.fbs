@@ -1,0 +1,5 @@
+// l3_gateway.fbs — L3 API Gateway message contracts
+// Messages specific to System 3 / Layer-3 orchestration interactions
+// TODO: Define GatewayRequest, GatewayResponse, RouteConfig tables
+
+namespace mothership.gateway;

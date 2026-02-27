@@ -1,0 +1,10 @@
+[package]
+name = "flatbuffers-schemas-rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "flatbuffers_schemas_rust"
+path = "src/lib.rs"
+
+[dependencies]

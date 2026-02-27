@@ -1,0 +1,13 @@
+{
+  "name": "@mothership/flatbuffers-schemas-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "flatbuffers": "^24.3.25"
+  }
+}

@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "crates/wasm-security-gate",
+    "crates/rvf-memory-physics",
+    "crates/wasm-rpc-client",
+    "crates/flatbuffers-schemas-rust",
+]
+exclude = ["bunker-strategy-rs"]
+resolver = "2"
+
+# WASM Security Gate release profile — minimize binary size
+[profile.release]
+opt-level = "s"
