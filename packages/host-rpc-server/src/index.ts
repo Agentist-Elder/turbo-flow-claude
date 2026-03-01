@@ -1,3 +1,5 @@
 // Host-side RPC bridge — public API surface
-// Exports: Unix_Register_Host_Function, Unix_Call_WASM_Function
-// TODO: Re-export bridge interface from rpc-bridge and wasm-runtime
+// Phase 7: exports the Node-to-WASM bridge and FlatBuffers builder helpers.
+export { WasmGateBridge, buildMinimalSecurityRequest, buildSecurityRequestWithCallerId } from './wasm-bridge.js';
+export type { RcDecision } from './wasm-bridge.js';
+export { RC_ALLOW, RC_DENY, RC_CHALLENGE, RC_QUARANTINE } from './wasm-bridge.js';
