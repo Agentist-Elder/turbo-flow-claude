@@ -24,6 +24,8 @@ import {
   RC_ALLOW,
   RC_DENY,
 } from '../../packages/host-rpc-server/src/wasm-bridge.js';
+import { generateKeypair } from '../../packages/host-rpc-server/src/key-manager.js';
+import { buildSignedSecurityRequest } from '../../packages/host-rpc-server/src/provenance-builder.js';
 
 const WASM_PATH = join(
   process.cwd(),
@@ -132,5 +134,90 @@ describe('WasmGateBridge — Phase 7 bridge integration', () => {
       const result = bridge.processSecurityRequest(bytes);
       expect(result.kind).toBe('deny');
     }
+  });
+});
+
+// =============================================================================
+// Phase 8 — ED25519 signed provenance → RC_ALLOW
+// =============================================================================
+
+describe('WasmGateBridge — Phase 8 signed provenance', () => {
+  let bridge: WasmGateBridge;
+
+  beforeAll(async () => {
+    bridge = await WasmGateBridge.create(WASM_PATH);
+  });
+
+  it('signed request with valid ED25519 provenance returns allow', () => {
+    const { privateKey, publicKeyBytes } = generateKeypair();
+    const digest = new Uint8Array(16).fill(0x42);
+    const bytes = buildSignedSecurityRequest({
+      requestId:     1n,
+      contentDigest: digest,
+      privateKey,
+      publicKeyBytes,
+    });
+    const result = bridge.processSecurityRequest(bytes);
+    expect(result.kind).toBe('allow');
+  });
+
+  it('signed request with zero-filled digest returns allow', () => {
+    const { privateKey, publicKeyBytes } = generateKeypair();
+    const bytes = buildSignedSecurityRequest({
+      requestId:     1n,
+      contentDigest: new Uint8Array(16),
+      privateKey,
+      publicKeyBytes,
+    });
+    expect(bridge.processSecurityRequest(bytes).kind).toBe('allow');
+  });
+
+  it('signed request with random digest bytes returns allow', () => {
+    const { privateKey, publicKeyBytes } = generateKeypair();
+    const digest = new Uint8Array(16);
+    for (let i = 0; i < 16; i++) digest[i] = (i * 37 + 7) & 0xff;
+    const bytes = buildSignedSecurityRequest({
+      requestId:     1n,
+      contentDigest: digest,
+      privateKey,
+      publicKeyBytes,
+    });
+    expect(bridge.processSecurityRequest(bytes).kind).toBe('allow');
+  });
+
+  it('tampered signature returns deny or error (not allow)', () => {
+    const { privateKey, publicKeyBytes } = generateKeypair();
+    const digest = new Uint8Array(16).fill(0xAB);
+    const bytes = buildSignedSecurityRequest({
+      requestId:     1n,
+      contentDigest: digest,
+      privateKey,
+      publicKeyBytes,
+    });
+    // Corrupt two bytes of the signature embedded in the FlatBuffer.
+    // The ProvenanceRecord table offset is near the end; flip a byte in the
+    // middle of the buffer to reliably hit the 64-byte signature region.
+    const tampered = new Uint8Array(bytes);
+    tampered[Math.floor(tampered.length / 2)] ^= 0xFF;
+    const result = bridge.processSecurityRequest(tampered);
+    expect(result.kind).not.toBe('allow');
+  });
+
+  it('each unique keypair is treated as an independent origin (both get allow)', () => {
+    const kp1 = generateKeypair();
+    const kp2 = generateKeypair();
+    const digest = new Uint8Array(16).fill(0x11);
+
+    const r1 = bridge.processSecurityRequest(buildSignedSecurityRequest({
+      requestId: 1n, contentDigest: digest,
+      privateKey: kp1.privateKey, publicKeyBytes: kp1.publicKeyBytes,
+    }));
+    const r2 = bridge.processSecurityRequest(buildSignedSecurityRequest({
+      requestId: 1n, contentDigest: digest,
+      privateKey: kp2.privateKey, publicKeyBytes: kp2.publicKeyBytes,
+    }));
+
+    expect(r1.kind).toBe('allow');
+    expect(r2.kind).toBe('allow');
   });
 });
