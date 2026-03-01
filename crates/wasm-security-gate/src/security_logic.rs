@@ -49,6 +49,7 @@ pub enum ProvenanceError {
     ChainHeightRegressed,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PqSigError {
     InvalidLength { got: usize, expected: usize },
@@ -89,6 +90,7 @@ pub fn check_embedding_len(ctx: &DomainContext<'_>) -> Result<(), OomError> {
 ///
 /// Both `.lo()` (bits 63:0) **and** `.hi()` (bits 127:64) must match.
 /// Comparing only `lo` exposes a 64-bit birthday attack (~2³² work).
+#[allow(dead_code)]
 #[inline]
 pub fn xxh3_digest_eq(a: &Xxh3Digest, b: &Xxh3Digest) -> bool {
     a.lo() == b.lo() && a.hi() == b.hi()
@@ -187,6 +189,7 @@ pub fn verify_ed25519(record: &ProvenanceRecord<'_>) -> Result<(), ProvenanceErr
 /// - **`EXPECTED_PQ_SIG_LEN == 0`**: validation disabled; any length accepted.
 /// - **Non-empty, `EXPECTED_PQ_SIG_LEN > 0`**: must equal exactly
 ///   `EXPECTED_PQ_SIG_LEN`.  A truncated or padded PQ sig indicates tampering.
+#[allow(dead_code)]
 pub fn validate_pq_signature(pq_sig: Option<&[u8]>) -> Result<(), PqSigError> {
     if EXPECTED_PQ_SIG_LEN == 0 {
         return Ok(()); // bootstrap: length validation disabled

@@ -93,6 +93,7 @@ struct GateState {
     /// Trusted `ProbabilisticFingerprint` store (FIFO eviction at `MAX_FINGERPRINTS`).
     fingerprints: Vec<[u8; 32]>,
     /// Pi-quantised memory for future adaptive scoring (placeholder).
+    #[allow(dead_code)]
     memory: ContinuousDeterministicMemory,
 }
 

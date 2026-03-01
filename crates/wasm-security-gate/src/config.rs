@@ -61,6 +61,7 @@ pub const MAX_FINGERPRINTS: usize = 256;
 ///
 /// Set to 0 to disable length validation during bootstrap (no PQ hardware CA
 /// attached yet).  Set to 3 293 for CRYSTALS-Dilithium 3 in production.
+#[allow(dead_code)]
 pub const EXPECTED_PQ_SIG_LEN: usize = 0; // bootstrap: validation disabled
 
 // ---------------------------------------------------------------------------
