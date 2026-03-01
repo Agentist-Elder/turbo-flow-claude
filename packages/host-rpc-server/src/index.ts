@@ -8,3 +8,5 @@ export { generateKeypair, loadKeypairFromFile, saveKeypairToFile } from './key-m
 export type { Ed25519Keypair } from './key-manager.js';
 export { buildSignedSecurityRequest } from './provenance-builder.js';
 export type { SignedRequestOptions } from './provenance-builder.js';
+export { L3Gateway } from './l3-gateway.js';
+export type { GatewayOptions } from './l3-gateway.js';
