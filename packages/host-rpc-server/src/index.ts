@@ -16,3 +16,6 @@ export type { CoherenceClientOptions, CoherenceResult } from './coherence-client
 // Phase 11: Thin Conductor — routing, quarantine, and neuralyzer hooks.
 export { CoherenceRouter } from './coherence-router.js';
 export type { RouterConfig, RouterResult, RouterOutcome, QuarantineMode, QuarantineRecord } from './coherence-router.js';
+// Phase 12: Swarm Orchestrator — Neuralyzer protocol (Terminate → Clean → Respawn).
+export { SwarmOrchestrator } from './swarm-orchestrator.js';
+export type { OrchestratorConfig, IProcessManager, SpawnedAgent, NeuralyzedEvent, NeuralyzingStep } from './swarm-orchestrator.js';
