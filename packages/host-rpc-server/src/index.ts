@@ -22,3 +22,6 @@ export type { OrchestratorConfig, IProcessManager, SpawnedAgent, NeuralyzedEvent
 // Phase 13: Quarantine Processor — deep decontamination via SemanticChunker.
 export { QuarantineProcessor } from './quarantine-processor.js';
 export type { QuarantineProcessorConfig, ProcessorResult, ProcessorOutcome } from './quarantine-processor.js';
+// Phase 14: Memory Ingestion — vault archivist; chunk + embed + store clean content.
+export { MemoryIngester } from './memory-ingestion.js';
+export type { IngesterConfig, IVectorStore, DocumentMetadata, ChunkMetadata, IngestionResult, IngestionSource } from './memory-ingestion.js';
