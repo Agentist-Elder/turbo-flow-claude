@@ -19,3 +19,6 @@ export type { RouterConfig, RouterResult, RouterOutcome, QuarantineMode, Quarant
 // Phase 12: Swarm Orchestrator — Neuralyzer protocol (Terminate → Clean → Respawn).
 export { SwarmOrchestrator } from './swarm-orchestrator.js';
 export type { OrchestratorConfig, IProcessManager, SpawnedAgent, NeuralyzedEvent, NeuralyzingStep } from './swarm-orchestrator.js';
+// Phase 13: Quarantine Processor — deep decontamination via SemanticChunker.
+export { QuarantineProcessor } from './quarantine-processor.js';
+export type { QuarantineProcessorConfig, ProcessorResult, ProcessorOutcome } from './quarantine-processor.js';
