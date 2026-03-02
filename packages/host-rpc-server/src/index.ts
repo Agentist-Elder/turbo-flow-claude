@@ -25,3 +25,6 @@ export type { QuarantineProcessorConfig, ProcessorResult, ProcessorOutcome } fro
 // Phase 14: Memory Ingestion — vault archivist; chunk + embed + store clean content.
 export { MemoryIngester } from './memory-ingestion.js';
 export type { IngesterConfig, IVectorStore, DocumentMetadata, ChunkMetadata, IngestionResult, IngestionSource } from './memory-ingestion.js';
+// Phase 15: Coherence Pipeline — central nervous system; wires all components together.
+export { CoherencePipeline } from './coherence-pipeline.js';
+export type { IRouterOrchestrator, IQuarantineProcessor, IMemoryIngester, RawPayload, PipelineOutcome, PipelineResult, PipelineStats, PipelineConfig } from './coherence-pipeline.js';
