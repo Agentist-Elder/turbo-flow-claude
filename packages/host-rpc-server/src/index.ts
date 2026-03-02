@@ -13,3 +13,6 @@ export type { GatewayOptions } from './l3-gateway.js';
 // Phase 10: Symbiote SDK — zero-dependency client for external agentic apps.
 export { CoherenceClient, CoherenceProtocolError, CoherenceConnectionError } from './coherence-client.js';
 export type { CoherenceClientOptions, CoherenceResult } from './coherence-client.js';
+// Phase 11: Thin Conductor — routing, quarantine, and neuralyzer hooks.
+export { CoherenceRouter } from './coherence-router.js';
+export type { RouterConfig, RouterResult, RouterOutcome, QuarantineMode, QuarantineRecord } from './coherence-router.js';
