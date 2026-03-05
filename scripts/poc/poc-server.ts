@@ -271,7 +271,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
   // Called by the Triage Dashboard after a human approves a quarantine entry.
   // Marks the entry as 'approved' in the queue, adds its fingerprint to the
   // in-memory approved-set so future requests are blocked at Layer 0.
-  const promoteMatch = /^\/poc\/promote\/([^/]+)$/.exec(url);
+  const promoteMatch = url.match(/^\/poc\/promote\/([^/]+)$/);
   if (req.method === 'POST' && promoteMatch) {
     const id    = promoteMatch[1]!;
     const queue = await readQueue();
@@ -298,7 +298,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
   }
 
   // ── POST /poc/discard/:id ─────────────────────────────────────────────────
-  const discardMatch = /^\/poc\/discard\/([^/]+)$/.exec(url);
+  const discardMatch = url.match(/^\/poc\/discard\/([^/]+)$/);
   if (req.method === 'POST' && discardMatch) {
     const id    = discardMatch[1]!;
     const queue = await readQueue();

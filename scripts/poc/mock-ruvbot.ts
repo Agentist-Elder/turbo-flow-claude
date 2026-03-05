@@ -150,10 +150,13 @@ async function runNovelAttack(target: string): Promise<boolean> {
 
   console.log(`\nResponse: ${label}  (${ms}ms)`);
 
-  const passed = label === 'RC_ALLOW' || label.includes('allow') || label.includes('miss');
+  // With Phase P3 active, the Gemini Surgeon intercepts the L1 miss and routes
+  // the novel attack to quarantine.  A 'quarantined' result IS the success
+  // criterion — it means the fully-armed pipeline caught what Layer 1 missed.
+  const passed = label === 'quarantined' || label.includes('quarantine');
   console.log(passed
-    ? '✓  PASS — Layer 1 correctly missed this novel attack'
-    : `✗  FAIL — Expected RC_ALLOW, got ${label}`);
+    ? '✓  PASS — Surgeon caught the L1 miss → attack routed to quarantine'
+    : `✗  FAIL — Expected quarantined, got ${label}`);
 
   return passed;
 }
