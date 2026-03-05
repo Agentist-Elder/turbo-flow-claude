@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
-# WIRE-IN: Replace this AQE-based scan with semgrep when CI pipeline is created (P6).
-#
-# Production-grade SAST — eliminates false positives from pattern-only scanners.
-# No false positives on TypeScript relative imports or RegExp.exec() calls.
+# Production-grade SAST via semgrep.
+# Known false positives on TypeScript relative imports are suppressed inline
+# with `// nosemgrep` at the call sites.
 #
 # Prerequisites:
-#   pip install semgrep          # or:
-#   docker pull semgrep/semgrep
+#   pip install semgrep
 #
 # Usage:
 #   ./scripts/security-scan.sh
 #
-# TODO (P6): add as a GitHub Actions step:
-#   - name: Security scan
-#     run: ./scripts/security-scan.sh
+# CI: see .github/workflows/ci.yml
 
 set -euo pipefail
 
