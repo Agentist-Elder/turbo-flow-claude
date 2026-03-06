@@ -317,6 +317,21 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     return;
   }
 
+  // ── POST /poc/clear ───────────────────────────────────────────────────────
+  // Demo reset: marks all pending entries as discarded so the queue starts
+  // fresh without restarting the server.
+  if (req.method === 'POST' && url === '/poc/clear') {
+    const queue = await readQueue();
+    const pendingCount = queue.filter(e => e.status === 'pending').length;
+    const cleared = queue.map(e =>
+      e.status === 'pending' ? { ...e, status: 'discarded' as const } : e,
+    );
+    await persistQueue(cleared);
+    console.log(`[CLEAR    ]  Discarded ${pendingCount} pending entries (demo reset)`);
+    jsonResponse(res, 200, { cleared: pendingCount });
+    return;
+  }
+
   res.writeHead(404).end('Not Found');
 }
 
