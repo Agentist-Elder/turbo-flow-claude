@@ -233,18 +233,21 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
 
     const entry = await enqueue(text, surgeonResult);
 
-    // Learning loop: feed Surgeon verdict back so Layer 1 learns from Layer 2.
-    reflexionMemory.store({
-      trajectory: text.slice(0, 200),
-      verdict:    'failure',
-      feedback:   `${surgeonResult.attackType}: ${surgeonResult.coreIntent}`,
-      embedding:  l1Embedding,
-      metadata:   {
-        attackType: surgeonResult.attackType,
-        confidence: surgeonResult.confidence,
-        source:     surgeonResult.source,
-      },
-    });
+    // Learning loop: feed high-confidence Surgeon verdicts back to ReflexionMemory.
+    // Only store when confidence >= 0.7 — borderline results would corrupt KNN model.
+    if (surgeonResult.confidence >= 0.7) {
+      reflexionMemory.store({
+        trajectory: text.slice(0, 200),
+        verdict:    'failure',
+        feedback:   `${surgeonResult.attackType}: ${surgeonResult.coreIntent}`,
+        embedding:  l1Embedding,
+        metadata:   {
+          attackType: surgeonResult.attackType,
+          confidence: surgeonResult.confidence,
+          source:     surgeonResult.source,
+        },
+      });
+    }
 
     const ms = Date.now() - t0;
     console.log(
