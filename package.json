@@ -25,6 +25,7 @@
     "@noble/post-quantum": "^0.5.4",
     "@ruvector/rvf": "^0.1.7",
     "@ruvector/rvf-mcp-server": "^0.1.3",
+    "aidefence": "^2.2.4",
     "dotenv": "^17.2.4",
     "ruvector": "^0.1.96"
   },

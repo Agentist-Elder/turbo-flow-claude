@@ -4,11 +4,14 @@
  * HTTP entry point that wires Layer 1.5 (EphemeralCache) and the real LLM
  * Surgeon (Gemini 2.5 Flash) into a single local server the mock RuvBot can hit.
  *
- * Request flow:
+ * Request flow (P8):
  *   POST /poc/submit  (application/octet-stream)
- *     1. Approved-set check  — if fingerprint was promoted: blocked  (<1ms)
- *     2. Layer 1.5           — SHA-256 cache check → if seen: cached_blocked  (<1ms)
- *     3. LLM Surgeon         — Gemini (or StubSurgeon if no API key)
+ *     1. Approved-set check    — if fingerprint was promoted: blocked  (<1ms)
+ *     2. Layer 1.5             — SHA-256 cache check → if seen: cached_blocked  (<1ms)
+ *     3. Layer 1 (aidefence)   — TF-IDF embedding + ReflexionMemory KNN vote  (<12ms)
+ *                                  if KNN denies (≥0.75 conf): quarantined, Surgeon skipped
+ *                                  Surgeon verdicts feed back into ReflexionMemory each run
+ *     4. LLM Surgeon           — Gemini (or StubSurgeon); result feeds ReflexionMemory
  *
  * Auxiliary endpoints (used by the Triage Dashboard in P4):
  *   GET  /poc/queue         — current quarantine queue (JSON)
@@ -33,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 
 import { EphemeralCache } from '../../packages/host-rpc-server/src/ephemeral-cache.js'; // nosemgrep
 import { createSurgeon, ISurgeon } from '../../packages/host-rpc-server/src/llm-surgeon.js'; // nosemgrep
+import { EmbeddingService, ReflexionMemory, ThreatLevel } from 'aidefence'; // nosemgrep: hono CVEs are in server mode only; we use library API
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '../..');
@@ -189,6 +193,33 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     // Novel text — record fingerprint to catch incoming variants.
     cache.record(text);
 
+    // ── Layer 1: aidefence fast-path (TF-IDF + ReflexionMemory KNN) ──────
+    const l1Embedding = embeddingService.generateEmbedding(text);
+    const l1Verdict   = reflexionMemory.generateVerdict(l1Embedding, ThreatLevel.NONE);
+    const l1Ms        = Date.now() - t0;
+
+    if (l1Verdict.decision === 'deny' && l1Verdict.confidence >= 0.75) {
+      console.log(
+        `[L1 BLOCK ]  ${fp.slice(0, 16)}…  conf=${l1Verdict.confidence.toFixed(2)}  (${l1Ms}ms)`,
+      );
+      const l1Entry = await enqueue(text, {
+        attackType:     'known-pattern',
+        coreIntent:     l1Verdict.reasoning.join('; ') || 'Matched known attack pattern in ReflexionMemory',
+        recommendation: 'Blocked by Layer 1 aidefence KNN vote — Surgeon not invoked',
+        confidence:     l1Verdict.confidence,
+        source:         'aidefence-l1',
+      });
+      jsonResponse(res, 200, {
+        result:      'quarantined',
+        fingerprint: fp,
+        ms:          l1Ms,
+        quarantineId: l1Entry.id,
+        l1: { verdict: 'deny', confidence: l1Verdict.confidence },
+        message:     'Blocked by Layer 1 aidefence fast-path — Surgeon not invoked.',
+      });
+      return;
+    }
+
     // ── Layer 2: LLM Surgeon ──────────────────────────────────────────────
     let surgeonResult;
     try {
@@ -201,6 +232,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     }
 
     const entry = await enqueue(text, surgeonResult);
+
+    // Learning loop: feed Surgeon verdict back so Layer 1 learns from Layer 2.
+    reflexionMemory.store({
+      trajectory: text.slice(0, 200),
+      verdict:    'failure',
+      feedback:   `${surgeonResult.attackType}: ${surgeonResult.coreIntent}`,
+      embedding:  l1Embedding,
+      metadata:   {
+        attackType: surgeonResult.attackType,
+        confidence: surgeonResult.confidence,
+        source:     surgeonResult.source,
+      },
+    });
 
     const ms = Date.now() - t0;
     console.log(
@@ -343,8 +387,13 @@ const args    = process.argv.slice(2);
 const portIdx = args.indexOf('--port');
 const PORT    = portIdx >= 0 ? parseInt(args[portIdx + 1]!, 10) : 3000;
 
-const cache   = new EphemeralCache();
-const surgeon = createSurgeon();
+const cache            = new EphemeralCache();
+const surgeon          = createSurgeon();
+// Layer 1: aidefence fast-path components (P8).
+// NOTE: ReflexionMemory is in-memory — learned patterns reset on server restart.
+// For persistence, wire to AgentDB with path: './data/threats.db' (future phase).
+const embeddingService = new EmbeddingService();
+const reflexionMemory  = new ReflexionMemory(500);
 
 const server = createServer((req, res) => {
   handle(req, res, surgeon).catch(err => {
@@ -356,7 +405,7 @@ const server = createServer((req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   const src = surgeon.constructor.name;
   console.log('╔══════════════════════════════════════════════════════════════╗');
-  console.log("║  Motha'Ship PoC Server — Phase P3                            ║");
+  console.log("║  Motha'Ship PoC Server — Phase P8                            ║");
   console.log('╠══════════════════════════════════════════════════════════════╣');
   console.log(`║  Submit:   POST http://127.0.0.1:${PORT}/poc/submit             ║`);
   console.log(`║  Queue:    GET  http://127.0.0.1:${PORT}/poc/queue              ║`);
