@@ -1,136 +1,90 @@
 # Bunker Strategy v1 — GTIG Feb 2026 Infrastructure Trust Gap
 
-> Generated: 2026-02-27T14:52:15.636Z
+> Generated: 2026-03-08T14:49:58.941Z
 > Model: gemini-2.5-flash via PAL
 > AIDefence: GATED (security-research override) | RVF Witnessed: pending
-> Goal: Draft a formal PRD for the Mothership AI Swarm. Vet the Hybrid Tri-System, Memory Physics, and Decoupled CA. You MUST in...
+> Goal: CRITICAL SPARC DIRECTIVE - PHASE 1: SPECIFICATION. You are a 5-agent GOAP swarm (1 Queen, 4 Subordinate Researchers) tas...
 
 > **SIGNED RESEARCH WARNING**: This content was gated by AIDefence L3
 > but allowed under `--allow-security-research` for defensive threat analysis.
 > The override is recorded in the RVF witness chain for audit purposes.
 
 ---
-Here is a draft of the formal Product Requirements Document (PRD) for the Mothership AI Swarm, incorporating your specified architectural facts and vetting the core components.
+The comparative analysis of 'Quantum Decay' (Method A) and 'Textual Excision' (Method B) reveals significant ambiguities and potential pitfalls for both approaches within the multi-modal AI architecture (LLMs, LangGraph, ruvector). Neither method presents a clear, immediately actionable path without further research and clarification on critical technical details, robustness, and impact on system integrity.
+
+Specifically:
+*   **Method A (Quantum Decay)**, while potentially fast and novel, introduces high uncertainty regarding its effect on LLM interpretation (will it truly neutralize intent or just garble output?) and carries a substantial risk of "cloaking" attacks where decayed vectors might inadvertently mimic benign ones or trigger unintended system behaviors. The precise mathematical definition and tuning of "decay" are also unclear.
+*   **Method B (Textual Excision)**, while more auditable, relies heavily on the accuracy and adversarial robustness of an "LLM Surgeon." A major concern is the potential for syntactic artifacts or structural damage to the payload, which could break deterministic components like LangGraph state machines or downstream parsers. Incomplete or over-excision also poses risks.
+
+Given these ambiguities, a draft Product Requirements Document (PRD) cannot be finalized at this stage. Instead, a highly targeted list of Preliminary PRD Questions is necessary to guide further engineering research and decision-making.
 
 ---
 
-## Product Requirements Document: Mothership AI Swarm
+### Preliminary PRD Questions for Payload Sanitization
 
-**Version:** 1.0
-**Date:** 2024-05-15
-**Authors:** [Your Name/Team]
+The following questions are critical for clarifying the feasibility, effectiveness, and trade-offs of 'Quantum Decay' and 'Textual Excision' before a definitive sanitization pipeline specification can be developed.
 
----
+#### 1. Questions Regarding 'Quantum Decay' (Method A)
 
-### 1. Introduction
+*   **A.1. Decay Mechanism & Quantifiable Metrics**:
+    *   What are the specific mathematical operations or transformations that constitute "Quantum Decay" using ruQu/ruvector?
+    *   How is the "decay strength" controlled and measured? What are the quantifiable metrics for successful decay (e.g., reduction in cosine similarity to known malicious vectors, increase in vector space entropy, statistical deviation from original intent)?
+    *   *Context*: This addresses the core mechanism and measurability of the proposed decay.
+*   **A.2. LLM Interpretation & Intent Neutralization**:
+    *   When a decayed vector is either directly processed by an LLM or converted back to text for LLM consumption, what is the *expected* LLM behavior? Is the goal to make the LLM refuse, hallucinate, produce benign but irrelevant content, or something else?
+    *   How will we rigorously measure the LLM's inability to reconstruct or infer malicious intent from a decayed payload, especially in the context of multi-turn interactions (e.g., APT42, UNC2970)?
+    *   *Context*: Addresses the "LLM Impact" point from the research plan.
+*   **A.3. Adversarial Robustness & Cloaking Prevention**:
+    *   How will the 'Quantum Decay' process be designed to prevent attackers from crafting payloads that, when decayed, *intentionally* map to benign vectors or specific system-triggering vectors (i.e., "cloaking" or "mimicry" attacks)?
+    *   What adversarial testing methodologies will be employed to validate the robustness of the decay mechanism against such sophisticated bypass attempts (e.g., Xanthorox, HONESTCUE)?
+    *   *Context*: Addresses the "ruvector database cloaking" point and general threat model.
+*   **A.4. Collateral Damage & Benign Intent Preservation**:
+    *   How do we ensure that the "decay" process doesn't inadvertently degrade or destroy legitimate, benign intent within a multi-modal payload, leading to false positives or loss of critical functionality?
+    *   What mechanisms will be in place to evaluate and minimize the impact on benign payload components?
+    *   *Context*: Critical for system usability and avoiding over-sanitization.
+*   **A.5. Performance & Resource Implications**:
+    *   What are the expected computational overheads (latency, CPU/GPU usage) of applying 'Quantum Decay' in real-time for high-throughput scenarios?
+    *   Does the use of ruQu/ruvector imply specific hardware requirements or introduce unique latency constraints that need to be accounted for?
+    *   *Context*: Practical operational realities.
 
-The rapid evolution of AI capabilities has ushered in a new era of sophisticated cyber threats. As detailed in the GTIG Feb 2026 Intel Summary, threat actors such as APT31 (Judgment Panda), APT42, Xanthorox, HONESTCUE, and UNC2970 are actively leveraging AI for automated vulnerability discovery, multi-turn social engineering, just-in-time malware generation, and large-scale identity fabrication. These advanced persistent threats (APTs) exploit the very nature of AI to bypass traditional security paradigms, rendering static detection and reactive defenses increasingly ineffective.
+#### 2. Questions Regarding 'Textual Excision' (Method B)
 
-The Mothership AI Swarm is an adaptive, proactive, and resilient AI-driven security platform designed to counter these emergent threats. It aims to establish a new baseline for defensive AI, operating with a deep understanding of adversarial AI tactics and employing novel architectural patterns to maintain integrity and effectiveness against highly dynamic and intelligent adversaries.
+*   **B.1. LLM Surgeon Specification & Accuracy**:
+    *   What are the specific requirements and architectural considerations for the "LLM Surgeon"? Will it be a fine-tuned model, a prompt-engineered general LLM, or a combination?
+    *   What are the target accuracy metrics (precision, recall, F1-score) for identifying and excising malicious content, and how will these be measured, validated, and continuously improved against evolving threats?
+    *   *Context*: Addresses the "LLM Impact" and general effectiveness.
+*   **B.2. Syntactic Integrity & Deterministic Systems**:
+    *   How will the "LLM Surgeon" guarantee that excised text maintains syntactic and structural integrity, especially for payloads intended for deterministic parsers (e.g., JSON, XML, code snippets, LangGraph state machine inputs)?
+    *   What post-excision validation, repair, or transformation mechanisms will be implemented to prevent breaking deterministic state machines or downstream processing (e.g., LangGraph conditional routing edges)?
+    *   *Context*: Addresses the "Non-LLM Impact" point regarding syntactic artifacts.
+*   **B.3. Semantic Preservation & Context Maintenance**:
+    *   How do we ensure that the "LLM Surgeon" removes only malicious intent without altering or removing critical benign instructions, thereby preserving the original, legitimate purpose and semantic context of the payload?
+    *   How will the LLM Surgeon handle implicit malicious intent that is not explicitly textual but inferred from context?
+    *   *Context*: Similar to A.4, but for textual manipulation.
+*   **B.4. Adversarial Robustness of the Surgeon**:
+    *   How will the "LLM Surgeon" itself be protected against adversarial prompts or inputs designed to bypass its excision capabilities, induce it to remove benign content, or even inject new malicious content during the "excision" process?
+    *   *Context*: The surgeon itself is an attack surface, especially given "Jailbreak-as-a-Service" threats.
+*   **B.5. Performance & Latency**:
+    *   What are the expected latency and throughput implications of using an LLM for real-time textual excision, particularly in high-volume, low-latency scenarios?
+    *   What strategies will be employed to optimize the performance of the LLM Surgeon?
+    *   *Context*: Practical operational realities.
 
-**Vision:** To establish a self-defending, AI-powered security ecosystem capable of autonomously detecting, analyzing, and neutralizing advanced AI-driven cyber threats at machine speed and scale.
+#### 3. General & Comparative Questions
 
-**Goals:**
-*   **Neutralize Just-in-Time Code Generation:** Implement mechanisms to detect and prevent malware payloads generated at runtime.
-*   **Counter AI-Augmented Social Engineering:** Develop capabilities to identify and disrupt multi-turn, personalized phishing and social engineering campaigns.
-*   **Thwart Jailbreak-as-a-Service Exploitation:** Prevent the misuse of commercial AI APIs for malicious code generation or bypassing safety filters.
-*   **Mitigate Automated Vulnerability Discovery:** Detect and respond to AI-driven systematic probing for zero-day vulnerabilities.
-*   **Defeat Identity Fabrication at Scale:** Establish verifiable identity and provenance checks to block AI-generated personas.
-
-### 2. Scope
-
-The Mothership AI Swarm will encompass a distributed network of specialized AI agents operating under a central orchestration layer. Its primary focus is on real-time threat detection, analysis, and adaptive response within enterprise and critical infrastructure environments.
-
-**In-Scope Features:**
-*   **Deterministic Provenance (via RVF Witness Chains):** Cryptographic verification of all code artifacts to defeat Just-in-Time code generation.
-*   **Probabilistic Fingerprinting:** Behavioral and stylistic analysis to detect AI-generated personas and social engineering attempts.
-*   **DID-based Passport Integration:** Utilization of Verifiable Credentials (VCs) and Decentralized Identifiers (DIDs) for robust identity verification.
-*   **Adaptive Countermeasure Orchestration:** Dynamic deployment and adjustment of defensive strategies based on real-time threat intelligence.
-*   **Continuous Threat Intelligence Integration:** Ingesting and processing external and internal threat feeds.
-
-**Out-of-Scope:**
-*   Direct human-in-the-loop incident response beyond alert generation and recommended actions.
-*   General-purpose network intrusion detection not specifically related to AI-driven threats.
-
-### 3. Key Features & Capabilities
-
-The Mothership AI Swarm will deliver the following core capabilities, directly addressing the threat patterns identified in the GTIG context:
-
-*   **JIT Code Generation Defense:** By mandating **Deterministic Provenance** through cryptographically verifiable RVF Witness Chains, every code artifact, regardless of its generation method, must possess a verifiable origin. This directly counters threats like HONESTCUE by ensuring that dynamically generated code cannot execute without a trusted chain of custody.
-*   **AI-Augmented Social Engineering & Identity Fabrication Detection:** Leveraging **Probabilistic Fingerprinting**, the swarm will analyze behavioral and stylistic patterns in communications and digital interactions to identify AI-generated content and personas (e.g., APT42, UNC2970). Furthermore, integration of a **DID-based Passport** system, utilizing RVF Witness Chains for verifiable credentials, will block identity fabrication at scale by requiring cryptographically attested identities for critical interactions.
-*   **Jailbreak-as-a-Service & Automated Vulnerability Discovery Mitigation:** The swarm will employ advanced behavioral analytics and anomaly detection within its **Hybrid Tri-System** to identify patterns indicative of AI-driven vulnerability scanning (APT31) or the misuse of commercial AI APIs (Xanthorox). This includes monitoring API call patterns, unusual resource access, and deviations from established baselines.
-
-### 4. Architectural Overview
-
-The Mothership AI Swarm is built upon a distributed, modular architecture designed for resilience, scalability, and high-fidelity threat analysis.
-
-#### 4.1. Hybrid Tri-System
-
-The core operational model of the Mothership AI Swarm is the **Hybrid Tri-System**, which integrates three distinct, yet collaborative, AI operational modes to provide comprehensive security coverage:
-
-1.  **Proactive Threat Anticipation (PTA):** This mode focuses on predictive analysis and intelligence gathering. It leverages large-scale data ingestion, threat modeling, and simulation to anticipate potential attack vectors and adversary tactics before they materialize. PTA agents continuously scan for emerging patterns in the threat landscape, informing the other two systems.
-2.  **Real-time Anomaly Detection & Analysis (RADA):** This mode is responsible for immediate detection and deep contextual analysis of active threats. RADA agents monitor system behaviors, network traffic, and user interactions for deviations from established baselines, employing probabilistic fingerprinting and behavioral heuristics. Upon detection, they perform rapid root-cause analysis and threat characterization.
-3.  **Adaptive Countermeasure Orchestration (ACO):** This mode focuses on dynamic response and remediation. ACO agents receive analyzed threat intelligence from RADA and PTA, then orchestrate appropriate countermeasures. This includes isolating compromised systems, deploying virtual patches, updating security policies, and initiating forensic data collection. The ACO system learns from each engagement, refining its response strategies.
-
-This hybrid approach ensures that the swarm is not only reactive but also predictive and adaptive, capable of evolving its defenses as threats evolve.
-
-#### 4.2. Memory Physics & Pi-Derived Quantization
-
-Central to the reliability and long-term operational integrity of the Mothership AI Swarm's agents is the concept of **Memory Physics**. This refers to the underlying mechanisms governing the stability and fidelity of the agents' **continuous deterministic memory**.
-
-*   **Continuous Deterministic Memory:** This is a specialized memory architecture designed to maintain a consistent, predictable, and evolving state for AI agents over extended periods. Unlike traditional volatile memory or simple persistent storage, it ensures that an agent's learned experiences, contextual understanding, and operational parameters remain coherent and free from unintended degradation or corruption.
-*   **Binary Harmonic Resonance (Memory Drift):** A critical challenge in continuous deterministic memory systems is the phenomenon of "binary harmonic resonance." This occurs when repeated processing cycles, updates, or interactions within the memory architecture lead to subtle, cumulative biases or oscillations in stored values. Over time, these biases can amplify, causing the memory state to "drift" from its intended representation, leading to loss of fidelity, incorrect recall, or unstable decision-making.
-*   **Pi-Derived Quantization:** To permanently break binary harmonic resonance and prevent memory drift, the Mothership AI Swarm mandates **Pi-Derived Quantization**. This technique scales the thresholds for memory state updates and value quantization by an irrational constant derived from Pi (π). By introducing an inherently non-repeating, non-cyclical factor into the quantization process, Pi-Derived Quantization disrupts the exact cyclical patterns that would otherwise lead to harmonic resonance. This ensures that memory states are continuously perturbed in a non-linear fashion, preventing the accumulation of drift and maintaining the long-term integrity and stability of the agents' continuous deterministic memory. This is crucial for maintaining the accuracy of probabilistic fingerprinting and the reliability of deterministic provenance.
-
-#### 4.3. Decoupled Contextual Awareness (CA)
-
-The Mothership AI Swarm employs a **Decoupled Contextual Awareness (CA)** architecture. This design principle separates the acquisition, processing, and storage of contextual information from the core reasoning and decision-making logic of individual AI agents.
-
-*   **Functionality:** A dedicated CA layer aggregates, normalizes, and enriches data from diverse sources, including internal system telemetry, external threat intelligence feeds (e.g., GTIG summaries), user behavior analytics, and environmental sensors. This layer maintains a dynamic, real-time knowledge graph of the operational environment and threat landscape.
-*   **Benefits:**
-    *   **Modularity & Scalability:** Context sources can be added, updated, or scaled independently without impacting core AI agent logic.
-    *   **Adaptability:** The swarm can rapidly integrate new threat intelligence or environmental changes, allowing for agile responses to evolving threats.
-    *   **Robustness:** Failure or degradation of a single context source does not compromise the entire system's operational integrity.
-    *   **Consistency:** Provides a unified, consistent view of context across all swarm agents.
-    *   **Explainability:** Contextual data is explicitly managed, aiding in the explainability and auditability of AI decisions.
-
-#### 4.4. Layer-3 API Gateway
-
-The Mothership AI Swarm utilizes a **Layer-3 API Gateway** as a critical component of its orchestration layer. It is imperative to clarify that this refers to **LLM Architectural Stack Layer 3**, which is a stateless HTTP API responsible for orchestrating AI security services, and **NOT** OSI Network Layer 3.
-
-*   **Role:** This gateway acts as the primary interface for external systems and internal swarm components to interact with the core AI security services. It handles request routing, authentication, authorization, rate limiting, and service composition.
-*   **Functionality:** The Layer-3 API Gateway orchestrates calls to various AI security microservices, such as those performing deterministic provenance checks, probabilistic fingerprinting, or DID-based passport validations. It ensures secure and efficient communication between the swarm's distributed components and external interfaces. Its stateless nature enhances scalability and resilience.
-
-#### 4.5. Swarm Communication & RPC
-
-Efficient and low-latency inter-component communication is paramount for the Mothership AI Swarm's performance, especially for real-time threat detection and response.
-
-*   **WASM-to-Unix RPC:** For all Remote Procedure Calls (RPC) between WebAssembly (WASM) modules and native Unix processes within the swarm, the serialization protocol **MUST** be either **FlatBuffers or MessagePack**. This mandate is critical to mitigate serialization and deserialization latency, ensuring high-throughput and low-overhead communication. These binary serialization formats offer superior performance compared to text-based alternatives like JSON, which is essential for the high-frequency data exchange required by the swarm's distributed AI agents.
-
-### 5. Technical Requirements & Constraints
-
-*   **Performance:**
-    *   Threat detection latency: < 500ms for critical threats.
-    *   Response orchestration latency: < 1 second for automated countermeasures.
-    *   Throughput: Capable of processing >100,000 security events per second per swarm node.
-*   **Scalability:** The system must be horizontally scalable to accommodate increasing data volumes and threat complexity.
-*   **Security:** All internal and external communications must be encrypted. Data at rest must be encrypted. Adherence to zero-trust principles.
-*   **Resilience:** The swarm must be fault-tolerant, with no single point of failure. Agents should be able to self-heal or be redeployed automatically.
-*   **Observability:** Comprehensive logging, monitoring, and tracing capabilities are required for all swarm components.
-
-### 6. Success Metrics
-
-*   Reduction in successful AI-driven phishing attacks by 90%.
-*   Detection rate of JIT-generated malware: >99%.
-*   Reduction in successful AI-driven identity fabrication attempts by 95%.
-*   Mean Time To Detect (MTTD) AI-driven vulnerabilities: < 1 hour.
-*   Mean Time To Respond (MTTR) to AI-driven threats: < 5 minutes.
-
-### 7. Future Considerations
-
-*   Integration with quantum-resistant cryptographic primitives for long-term provenance integrity.
-*   Development of a federated learning framework for threat intelligence sharing among trusted swarm deployments.
+*   **C.1. Threat Model Alignment & Efficacy**:
+    *   Given the specific threat patterns outlined in `gtig_context.md` (Just-in-Time Code Generation, AI-Augmented Social Engineering, Jailbreak-as-a-Service, Automated Vulnerability Discovery), which method (A or B) is projected to provide a more robust and scalable defense against these specific threats, and why?
+    *   How will we measure the comparative efficacy of Method A vs. Method B against a diverse and evolving set of malicious payloads, considering both false positives and false negatives?
+    *   *Context*: Directly links to the provided threat intelligence.
+*   **C.2. Hybrid Approach Feasibility**:
+    *   Has a hybrid approach (e.g., initial decay followed by textual excision, or vice-versa) been considered? What are the potential benefits, drawbacks, and complexities of such a combined strategy?
+    *   *Context*: Explores alternative solutions.
+*   **C.3. Observability, Auditability, and Explainability**:
+    *   How will the sanitization process (for either method) be made observable and auditable, allowing engineers to understand *why* a payload was sanitized, *what* the resulting sanitized output was, and *how* the decision was made?
+    *   *Context*: Essential for debugging, compliance, and continuous improvement.
+*   **C.4. Recovery & Fallback Mechanisms**:
+    *   What is the defined fallback mechanism if sanitization fails (e.g., produces an unusable payload, or is deemed insufficient)? Will payloads be quarantined, rejected, flagged for human review, or will an alternative processing path be engaged?
+    *   *Context*: Addresses failure modes and operational resilience.
 
 ---
 
-Please continue this conversation using the continuation_id from this response if you'd like to explore this further, particularly regarding specific implementation details for any of the architectural components or the integration of additional GTIG research questions.
+RESPONSE REQUIRED: Please immediately continue using the continuation_id from this response. Cannot proceed without your clarification/input on these preliminary questions.
