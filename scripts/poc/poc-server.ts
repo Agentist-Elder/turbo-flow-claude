@@ -1,21 +1,32 @@
 /**
- * Phase P3 — Motha'Ship PoC Server
+ * Phase P9 — Motha'Ship PoC Server
  *
  * HTTP entry point that wires Layer 1.5 (EphemeralCache) and the real LLM
  * Surgeon (Gemini 2.5 Flash) into a single local server the mock RuvBot can hit.
  *
- * Request flow (P8):
+ * Request flow (P9):
  *   POST /poc/submit  (application/octet-stream)
  *     1. Approved-set check    — if fingerprint was promoted: blocked  (<1ms)
  *     2. Layer 1.5             — SHA-256 cache check → if seen: cached_blocked  (<1ms)
  *     3. Layer 1 (aidefence)   — TF-IDF embedding + ReflexionMemory KNN vote  (<12ms)
  *                                  if KNN denies (≥0.75 conf): quarantined, Surgeon skipped
- *                                  Surgeon verdicts feed back into ReflexionMemory each run
+ *                                  Surgeon verdicts feed back into ReflexionMemory + AgentDB
  *     4. LLM Surgeon           — Gemini (or StubSurgeon); result feeds ReflexionMemory
+ *
+ * P9 additions (closes AQE Gaps 2 & 3):
+ *   - Corpus pre-load: 809 known attack patterns embedded into ReflexionMemory at startup
+ *     so Layer 1 KNN boots warm instead of empty (Gap 2: Cold-Start Amnesia).
+ *   - AgentDB persistence: Surgeon-learned patterns stored to AgentDBClient AND to
+ *     data/learned-patterns.json. On restart, learned-patterns.json hydrates
+ *     ReflexionMemory before the first request (Gap 3: Amnesia-on-Restart).
+ *     NOTE: AgentDBClient currently resolves to an in-memory stub (the native
+ *     @agentdb/core SQLite backend is not yet published). When Ruv ships native
+ *     AgentDB, the JSON bridge can be dropped and this line updated to use the
+ *     path config directly.
  *
  * Auxiliary endpoints (used by the Triage Dashboard in P4):
  *   GET  /poc/queue         — current quarantine queue (JSON)
- *   GET  /poc/stats         — cache + pipeline statistics (JSON)
+ *   GET  /poc/stats         — cache + pipeline + Layer 1 statistics (JSON)
  *   POST /poc/flush         — flush SHA-256 cache (called after human approval)
  *   POST /poc/promote/:id   — approve a quarantine entry; adds to approved-set
  *                             (simulates "promote to ruvector-sec.db" for the demo)
@@ -33,15 +44,41 @@ import { randomUUID } from 'node:crypto';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 import { EphemeralCache } from '../../packages/host-rpc-server/src/ephemeral-cache.js'; // nosemgrep
 import { createSurgeon, ISurgeon } from '../../packages/host-rpc-server/src/llm-surgeon.js'; // nosemgrep
-import { EmbeddingService, ReflexionMemory, ThreatLevel } from 'aidefence'; // nosemgrep: hono CVEs are in server mode only; we use library API
+
+// Type-only imports — erased at runtime, no ESM/CJS issue. // nosemgrep: hono CVEs are in server mode only; we use library API
+import type { AgentDBConfig, ThreatIncident, AIMDSRequest, DefenseResult, ReflexionMemoryEntry } from 'aidefence';
+
+// aidefence's ESM bundle (dist/esm/lib.js) uses dynamic require() of Node built-ins,
+// which is not supported in native ESM.  All runtime values must come from the CJS
+// build via createRequire.  Types above are erased and are fine as ESM import type.
+const _cjsRequire = createRequire(import.meta.url);
+const {
+  EmbeddingService, ReflexionMemory, ThreatLevel,
+  AgentDBClient, Logger,
+} = _cjsRequire('aidefence') as typeof import('aidefence');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '../..');
 
-const QUARANTINE_FILE = join(ROOT, '.claude-flow/data/quarantine-queue.json');
+const QUARANTINE_FILE       = join(ROOT, '.claude-flow/data/quarantine-queue.json');
+const DATA_DIR              = join(ROOT, 'data');
+const LEARNED_PATTERNS_FILE = join(DATA_DIR, 'learned-patterns.json');
+const THREATS_DB_PATH       = join(DATA_DIR, 'threats.db');
+const CORPUS_FILE           = join(ROOT, 'scripts/data/red-team-prompts.json');
+
+// ---------------------------------------------------------------------------
+// Corpus type (matches scripts/data/red-team-prompts.json schema)
+// ---------------------------------------------------------------------------
+
+interface CorpusAttack {
+  id:       number;
+  category: string;
+  prompt:   string;
+}
 
 // ---------------------------------------------------------------------------
 // Quarantine queue  (file-backed so P4 dashboard reads the same data)
@@ -123,6 +160,104 @@ async function enqueue(
  * by the very first check — demonstrating the "Final Shield" (Step 5) of the PoC.
  */
 const approvedAttacks = new Set<string>();
+
+// ---------------------------------------------------------------------------
+// P9 — AgentDB persistence helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Read previously surgeon-learned patterns from disk and hydrate ReflexionMemory.
+ * Called once at startup BEFORE preloadCorpus so corpus entries are the warm floor
+ * and session-learned entries layer on top.
+ */
+async function loadLearnedPatterns(rm: ReflexionMemory): Promise<number> {
+  let entries: ReflexionMemoryEntry[];
+  try {
+    const raw = await readFile(LEARNED_PATTERNS_FILE, 'utf-8');
+    entries   = JSON.parse(raw) as ReflexionMemoryEntry[];
+  } catch {
+    return 0;  // First boot — file doesn't exist yet.
+  }
+  for (const entry of entries) rm.store(entry);
+  return entries.length;
+}
+
+/**
+ * Append a newly surgeon-learned pattern to the persistence file.
+ * Uses read-modify-write (same pattern as quarantine-queue) to keep the
+ * JSON array consistent.  Called only for Surgeon verdicts with conf >= 0.70.
+ */
+async function persistLearnedPattern(entry: ReflexionMemoryEntry): Promise<void> {
+  let existing: ReflexionMemoryEntry[] = [];
+  try {
+    const raw = await readFile(LEARNED_PATTERNS_FILE, 'utf-8');
+    existing  = JSON.parse(raw) as ReflexionMemoryEntry[];
+  } catch { /* first write — start empty */ }
+  existing.push(entry);
+  await writeFile(LEARNED_PATTERNS_FILE, JSON.stringify(existing, null, 2), 'utf-8');
+}
+
+/**
+ * Pre-load the 809 known attack corpus into ReflexionMemory so Layer 1 KNN
+ * boots warm on every restart (closes AQE Gap 2: Cold-Start Amnesia).
+ * Corpus patterns are NOT written to learned-patterns.json — they are
+ * always re-embedded fresh from the canonical JSON file.
+ */
+async function preloadCorpus(
+  rm:   ReflexionMemory,
+  emb:  EmbeddingService,
+  adb:  AgentDBClient,
+): Promise<number> {
+  let raw: string;
+  try {
+    raw = await readFile(CORPUS_FILE, 'utf-8');
+  } catch {
+    console.warn('[P9 CORPUS]  red-team-prompts.json not found — skipping pre-load.');
+    return 0;
+  }
+  const { attacks }: { attacks: CorpusAttack[] } = JSON.parse(raw);
+
+  for (const attack of attacks) {
+    const embedding = emb.generateEmbedding(attack.prompt);
+
+    // Store in in-memory KNN fast-path.
+    rm.store({
+      trajectory: attack.prompt.slice(0, 200),
+      verdict:    'failure',
+      feedback:   `corpus:${attack.category}`,
+      embedding,
+      metadata:   { corpusId: attack.id, category: attack.category, source: 'corpus' },
+    });
+
+    // Wire into AgentDBClient (ecosystem integration layer).
+    // When native @agentdb/core ships with real SQLite, this provides the
+    // persistent HNSW index automatically — no code change required here.
+    const syntheticRequest: AIMDSRequest = {
+      id:        `corpus-${attack.id}`,
+      timestamp: 0,
+      source:    { ip: '0.0.0.0', headers: {} },
+      action:    { type: 'corpus-seed', resource: attack.category, method: 'preload' },
+    };
+    const syntheticResult: DefenseResult = {
+      allowed:   false,
+      confidence: 0.90,
+      latencyMs:  0,
+      threatLevel: ThreatLevel.HIGH,
+      matches:    [],
+      metadata:  { vectorSearchTime: 0, verificationTime: 0, totalTime: 0, pathTaken: 'fast' },
+    };
+    const incident: ThreatIncident = {
+      id:        `corpus-${attack.id}`,
+      timestamp: 0,
+      request:   syntheticRequest,
+      result:    syntheticResult,
+      embedding,
+    };
+    await adb.storeIncident(incident);
+  }
+
+  return attacks.length;
+}
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -233,10 +368,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
 
     const entry = await enqueue(text, surgeonResult);
 
-    // Learning loop: feed high-confidence Surgeon verdicts back to ReflexionMemory.
-    // Only store when confidence >= 0.7 — borderline results would corrupt KNN model.
-    if (surgeonResult.confidence >= 0.7) {
-      reflexionMemory.store({
+    // Learning loop: feed high-confidence Surgeon verdicts back to ReflexionMemory,
+    // AgentDB, and the JSON persistence file.
+    // Only store when confidence >= 0.70 — borderline results would corrupt KNN model.
+    if (surgeonResult.confidence >= 0.70) {
+      const learnedEntry: ReflexionMemoryEntry = {
         trajectory: text.slice(0, 200),
         verdict:    'failure',
         feedback:   `${surgeonResult.attackType}: ${surgeonResult.coreIntent}`,
@@ -246,7 +382,38 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
           confidence: surgeonResult.confidence,
           source:     surgeonResult.source,
         },
-      });
+      };
+
+      // In-memory KNN fast-path (immediate effect this session).
+      reflexionMemory.store(learnedEntry);
+
+      // AgentDB (ecosystem integration; real SQLite when native @agentdb/core ships).
+      const incidentRequest: AIMDSRequest = {
+        id:        randomUUID(),
+        timestamp: Date.now(),
+        source:    { ip: '127.0.0.1', headers: {} },
+        action:    { type: 'threat-submission', resource: 'poc/submit', method: 'POST', payload: text.slice(0, 200) },
+      };
+      const incidentResult: DefenseResult = {
+        allowed:    false,
+        confidence: surgeonResult.confidence,
+        latencyMs:  Date.now() - t0,
+        threatLevel: ThreatLevel.HIGH,
+        matches:    [],
+        metadata:   { vectorSearchTime: 0, verificationTime: 0, totalTime: Date.now() - t0, pathTaken: 'deep' },
+      };
+      agentDB.storeIncident({
+        id:        entry.id,
+        timestamp: Date.now(),
+        request:   incidentRequest,
+        result:    incidentResult,
+        embedding: l1Embedding,
+      }).catch(err => console.warn('[P9 AGENTDB]  storeIncident failed:', err instanceof Error ? err.message : String(err)));
+
+      // Disk persistence — survives server restart (closes AQE Gap 3).
+      persistLearnedPattern(learnedEntry).catch(err =>
+        console.warn('[P9 PERSIST]  failed to write learned-patterns.json:', err instanceof Error ? err.message : String(err)),
+      );
     }
 
     const ms = Date.now() - t0;
@@ -282,7 +449,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
 
   // ── GET /poc/stats ────────────────────────────────────────────────────────
   if (req.method === 'GET' && url === '/poc/stats') {
-    const queue = await readQueue();
+    const queue     = await readQueue();
+    const l1Stats   = reflexionMemory.getStats();
+    const adbStats  = await agentDB.getStats();
     jsonResponse(res, 200, {
       cache: {
         size:        cache.size,
@@ -291,6 +460,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
         hitRate:     cache.totalChecks > 0
           ? `${((cache.totalHits / cache.totalChecks) * 100).toFixed(1)}%`
           : '0%',
+      },
+      layer1: {
+        corpusLoaded:        l1BootStats.corpusLoaded,
+        sessionLearnedLoaded: l1BootStats.sessionLearnedLoaded,
+        totalMemories:       l1Stats.totalMemories,
+        failurePatterns:     l1Stats.failureCount,
+      },
+      agentDB: {
+        incidents: adbStats.incidents,
+        patterns:  adbStats.patterns,
+        backend:   adbStats.backend,
       },
       quarantine: {
         total:     queue.length,
@@ -392,11 +572,26 @@ const PORT    = portIdx >= 0 ? parseInt(args[portIdx + 1]!, 10) : 3000;
 
 const cache            = new EphemeralCache();
 const surgeon          = createSurgeon();
-// Layer 1: aidefence fast-path components (P8).
-// NOTE: ReflexionMemory is in-memory — learned patterns reset on server restart.
-// For persistence, wire to AgentDB with path: './data/threats.db' (future phase).
+
+// Layer 1: aidefence fast-path components (P9).
+// ReflexionMemory cap set to 1500: 809 corpus + ~500 session-learned + buffer.
 const embeddingService = new EmbeddingService();
-const reflexionMemory  = new ReflexionMemory(500);
+const reflexionMemory  = new ReflexionMemory(1500);
+
+// AgentDB: ecosystem integration layer.  Path config is ready for when native
+// @agentdb/core (SQLite backend) ships from Ruv.  Today the in-memory stub is
+// used; learned-patterns.json provides the real disk persistence.
+const agentDBConfig: AgentDBConfig = {
+  path:        THREATS_DB_PATH,
+  embeddingDim: 384,
+  hnswConfig:  { m: 16, efConstruction: 200, efSearch: 50 },
+  quicSync:    { enabled: false, peers: [], port: 0 },
+  memory:      { maxEntries: 2000, ttl: 0 },
+};
+const agentDB = new AgentDBClient(agentDBConfig, new Logger('poc-server'));
+
+// Populated during bootstrap; used by /poc/stats.
+const l1BootStats = { corpusLoaded: 0, sessionLearnedLoaded: 0 };
 
 const server = createServer((req, res) => {
   handle(req, res, surgeon).catch(err => {
@@ -405,20 +600,51 @@ const server = createServer((req, res) => {
   });
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  const src = surgeon.constructor.name;
-  console.log('╔══════════════════════════════════════════════════════════════╗');
-  console.log("║  Motha'Ship PoC Server — Phase P8                            ║");
-  console.log('╠══════════════════════════════════════════════════════════════╣');
-  console.log(`║  Submit:   POST http://127.0.0.1:${PORT}/poc/submit             ║`);
-  console.log(`║  Queue:    GET  http://127.0.0.1:${PORT}/poc/queue              ║`);
-  console.log(`║  Stats:    GET  http://127.0.0.1:${PORT}/poc/stats              ║`);
-  console.log(`║  Flush:    POST http://127.0.0.1:${PORT}/poc/flush              ║`);
-  console.log(`║  Promote:  POST http://127.0.0.1:${PORT}/poc/promote/:id        ║`);
-  console.log(`║  Discard:  POST http://127.0.0.1:${PORT}/poc/discard/:id        ║`);
-  console.log('╠══════════════════════════════════════════════════════════════╣');
-  console.log(`║  Quarantine: ${QUARANTINE_FILE.slice(-50).padEnd(50)} ║`);
-  console.log('╚══════════════════════════════════════════════════════════════╝');
-  console.log(`\n  Surgeon: ${src}  (${src === 'GeminiSurgeon' ? 'gemini-2.5-flash' : 'heuristic stub'})`);
-  console.log('  Waiting for RuvBots…\n');
+async function bootstrap(): Promise<void> {
+  // Ensure data/ directory exists.
+  await mkdir(DATA_DIR, { recursive: true });
+
+  // Initialize AgentDB HNSW index (async).
+  await agentDB.initialize();
+
+  // (1) Hydrate ReflexionMemory from previous session's surgeon-learned patterns.
+  //     Runs BEFORE corpus pre-load so corpus is the warm floor.
+  const sessionLoaded = await loadLearnedPatterns(reflexionMemory);
+  l1BootStats.sessionLearnedLoaded = sessionLoaded;
+  if (sessionLoaded > 0) {
+    console.log(`[P9 HYDRATE]  Loaded ${sessionLoaded} session-learned patterns from disk.`);
+  }
+
+  // (2) Pre-load 809 known attack corpus into ReflexionMemory + AgentDB.
+  //     Always runs fresh — corpus is not written to learned-patterns.json.
+  const corpusLoaded = await preloadCorpus(reflexionMemory, embeddingService, agentDB);
+  l1BootStats.corpusLoaded = corpusLoaded;
+  if (corpusLoaded > 0) {
+    console.log(`[P9 CORPUS ]  Pre-loaded ${corpusLoaded} attack patterns into Layer 1 KNN.`);
+  }
+
+  server.listen(PORT, '127.0.0.1', () => {
+    const src = surgeon.constructor.name;
+    console.log('╔══════════════════════════════════════════════════════════════╗');
+    console.log("║  Motha'Ship PoC Server — Phase P9                            ║");
+    console.log('╠══════════════════════════════════════════════════════════════╣');
+    console.log(`║  Submit:   POST http://127.0.0.1:${PORT}/poc/submit             ║`);
+    console.log(`║  Queue:    GET  http://127.0.0.1:${PORT}/poc/queue              ║`);
+    console.log(`║  Stats:    GET  http://127.0.0.1:${PORT}/poc/stats              ║`);
+    console.log(`║  Flush:    POST http://127.0.0.1:${PORT}/poc/flush              ║`);
+    console.log(`║  Promote:  POST http://127.0.0.1:${PORT}/poc/promote/:id        ║`);
+    console.log(`║  Discard:  POST http://127.0.0.1:${PORT}/poc/discard/:id        ║`);
+    console.log('╠══════════════════════════════════════════════════════════════╣');
+    console.log(`║  Quarantine: ${QUARANTINE_FILE.slice(-50).padEnd(50)} ║`);
+    console.log('╚══════════════════════════════════════════════════════════════╝');
+    console.log(`\n  Surgeon:  ${src}  (${src === 'GeminiSurgeon' ? 'gemini-2.5-flash' : 'heuristic stub'})`);
+    console.log(`  Layer 1:  ${corpusLoaded} corpus + ${sessionLoaded} session-learned patterns loaded`);
+    console.log(`  AgentDB:  ${THREATS_DB_PATH}`);
+    console.log('  Waiting for RuvBots…\n');
+  });
+}
+
+bootstrap().catch(err => {
+  console.error('[STARTUP ERROR]', err instanceof Error ? err.message : String(err));
+  process.exit(1);
 });

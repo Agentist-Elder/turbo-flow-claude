@@ -1,0 +1,2 @@
+{"context":"poc-server","level":"info","message":"Initializing AgentDB client...","service":"aimds-gateway","timestamp":"2026-03-09T18:18:38.365Z"}
+{"backend":"wasm-simd","context":"poc-server","embeddingDim":384,"level":"info","message":"AgentDB client initialized successfully","service":"aimds-gateway","timestamp":"2026-03-09T18:18:38.369Z","wasmEnabled":true}
