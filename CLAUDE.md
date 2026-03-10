@@ -20,7 +20,8 @@ This document is the absolute ground truth for all swarm agents. You are buildin
 All inbound traffic passes through three layers in order. Do NOT collapse or skip layers.
 * **Layer 1 — aidefence fast-path (<12ms):** `npm install aidefence`. 183+ patterns + ReflexionMemory KNN vote. Handles ~95% of known attacks locally.
   * **Persistence is mandatory:** configure `agentdb: { path: './data/threats.db' }`. Default `:memory:` wipes all learned patterns on restart.
-  * **Learning loop:** feed every LLM Surgeon verdict back into ReflexionMemory so the fast-path learns from zero-days the Surgeon catches.
+  * **Detection confidence threshold: 0.9 (production decision).** Layer 1 only fast-blocks at ≥0.9 confidence. Below that, traffic flows to Layer 2 (LLM Surgeon). This is intentional — the Surgeon handles gray-zone cases. Do NOT lower this threshold without measuring false-positive impact first.
+  * **Learning loop:** feed every LLM Surgeon verdict back into ReflexionMemory so the fast-path learns from zero-days the Surgeon catches. **Learning gate: 0.70** — only Surgeon verdicts with confidence ≥0.70 are persisted. This is a tuning opportunity: too high = slow learning; too low = learns from uncertain calls. Review with production traffic data before changing.
   * **Embedding note:** EmbeddingService uses TF-IDF + security-term weighting, not a transformer. Adequate for known patterns; novel vocabulary still reaches Layer 2.
 * **Layer 2 — LLM Surgeon (deep path, ~1-2s):** Required for payload excision. If a payload is partially malicious, the Surgeon surgically removes the contaminated portion so the safe remainder passes through. This is active sanitization, not theater. Block/allow alone is insufficient for partial threats.
 * **Layer 3 — Coherence layer (semantic HNSW backstop):** Our custom-built vector infrastructure. Redundant depth for zero-days that pass Layers 1 and 2. Retained alongside aidefence — defense-in-depth, not replacement.
@@ -44,6 +45,7 @@ All inbound traffic passes through three layers in order. Do NOT collapse or ski
   * *Tier 3 (Sonnet/Opus):* 2-5s. Use for complex reasoning, architecture, security.
 
 ## 7. Swarm Execution Laws (CRITICAL)
+* **GOAP pre-Thinker gate (src/main.ts:959):** The AIDefence gate before the GOAP planner is hardcoded at `orchestrator.dispatch(goalMessage)` with no skip flag. Adding one requires punching a deliberate hole in the security layer. Workaround for internal security research: use `mcp__pal__secaudit` from CC directly (bypasses the GOAP pre-gate entirely). Do NOT add `--skip-goal-gate` without an explicit decision to accept that risk.
 * **1 MESSAGE = ALL RELATED OPERATIONS:** Sequential execution is strictly forbidden. ALWAYS batch ALL file reads/writes, Bash commands, and Task spawns in a single concurrent message.
 * **Separation of Duties:** * `npx @claude-flow/cli@latest` handles orchestration, memory, and topology routing.
   * Claude Code's `Task` tool does the actual execution, code generation, and file operations.
