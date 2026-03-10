@@ -13,6 +13,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { randomUUID } from 'crypto';
+import { mkdtempSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   AIDefenceCoordinator,
   ThreatLevel,
@@ -613,7 +616,10 @@ describe('Adaptive Learning (Phase 6)', () => {
     it('full loop completes within 38ms SLA', async () => {
       const { scanner } = createNeuralScanner();
       const neuralClient = new NeuralMCPClient(scanner);
-      const coordinator = new AIDefenceCoordinator({}, neuralClient);
+      // Use a temp DB path so parallel test workers don't contend on the same file.
+      const tmpDb = join(mkdtempSync(join(tmpdir(), 'sla-test-')), 'attack-patterns.db');
+      const isolatedScanner = new VectorScanner({ dbPath: tmpDb });
+      const coordinator = new AIDefenceCoordinator({}, neuralClient, isolatedScanner);
       const orchestrator = new SwarmOrchestrator(coordinator);
       await coordinator.initialize(); // pre-warm VectorDB — cold-start cost excluded from SLA timer
 

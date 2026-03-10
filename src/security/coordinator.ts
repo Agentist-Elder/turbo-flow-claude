@@ -203,14 +203,14 @@ export class AIDefenceCoordinator {
   private mcp: IMCPClient;
   private vectorScanner: VectorScanner;
 
-  constructor(config: Partial<CoordinatorConfig> = {}, mcpClient?: IMCPClient) {
+  constructor(config: Partial<CoordinatorConfig> = {}, mcpClient?: IMCPClient, scanner?: VectorScanner) {
     this.config = {
       thresholds: { ...DEFAULT_CONFIG.thresholds, ...config.thresholds },
       timeouts: { ...DEFAULT_CONFIG.timeouts, ...config.timeouts },
       features: { ...DEFAULT_CONFIG.features, ...config.features },
     };
     this.mcp = mcpClient ?? new MockMCPClient();
-    this.vectorScanner = new VectorScanner();
+    this.vectorScanner = scanner ?? new VectorScanner();
   }
 
   /**
