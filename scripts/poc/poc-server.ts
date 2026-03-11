@@ -41,13 +41,14 @@
 
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { writeFile, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, appendFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 import { EphemeralCache } from '../../packages/host-rpc-server/src/ephemeral-cache.js'; // nosemgrep
 import { createSurgeon, ISurgeon } from '../../packages/host-rpc-server/src/llm-surgeon.js'; // nosemgrep
+import { HazmatEnvelopeSchema, validateFreshness, JournalismReportSchema } from '../../packages/common-types/src/index.js'; // nosemgrep
 
 // Type-only imports — erased at runtime, no ESM/CJS issue. // nosemgrep: hono CVEs are in server mode only; we use library API
 import type { AgentDBConfig, ThreatIncident, AIMDSRequest, DefenseResult, ReflexionMemoryEntry } from 'aidefence';
@@ -65,6 +66,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '../..');
 
 const QUARANTINE_FILE       = join(ROOT, '.claude-flow/data/quarantine-queue.json');
+const HAZMAT_LOG_FILE       = join(ROOT, '.claude-flow/data/hazmat-log.jsonl');
+const REPORTS_FILE          = join(ROOT, '.claude-flow/data/journalism-reports.jsonl');
 const DATA_DIR              = join(ROOT, 'data');
 const LEARNED_PATTERNS_FILE = join(DATA_DIR, 'learned-patterns.json');
 const THREATS_DB_PATH       = join(DATA_DIR, 'threats.db');
@@ -559,6 +562,113 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     return;
   }
 
+  // ── POST /api/v1/telemetry/hazmat ─────────────────────────────────────────
+  // Receives HazmatEnvelopes from field RuvBots. Validates structure + freshness,
+  // then appends to the internal hazmat log for Surgeon processing.
+  // The full 4-layer AIMDS stack applies to traffic reaching this endpoint —
+  // an envelope that fails structural or freshness checks is rejected immediately.
+  if (req.method === 'POST' && url === '/api/v1/telemetry/hazmat') {
+    const ct = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+    if (ct !== 'application/json') {
+      res.writeHead(415).end('Expected Content-Type: application/json');
+      return;
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse((await readBody(req)).toString('utf-8'));
+    } catch {
+      res.writeHead(400).end('Invalid JSON');
+      return;
+    }
+
+    const parsed = HazmatEnvelopeSchema.safeParse(body);
+    if (!parsed.success) {
+      console.log(`[HAZMAT   ]  REJECTED — schema validation failed`);
+      jsonResponse(res, 422, { error: 'Invalid HazmatEnvelope', issues: parsed.error.issues });
+      return;
+    }
+
+    const envelope = parsed.data;
+
+    if (!validateFreshness(envelope)) {
+      console.log(`[HAZMAT   ]  REJECTED — stale or future-dated envelope from ${envelope.metadata.source_node_id}`);
+      jsonResponse(res, 422, { error: 'Envelope timestamp outside freshness window — possible replay attack' });
+      return;
+    }
+
+    // Append to internal hazmat log (mirrors MothaShip internal hazmat path in CLAUDE.md §3A).
+    const logEntry = JSON.stringify({
+      ...envelope,
+      received_at: new Date().toISOString(),
+      source: 'RUVBOT_FIELD',
+    });
+    await mkdir(dirname(HAZMAT_LOG_FILE), { recursive: true });
+    await appendFile(HAZMAT_LOG_FILE, logEntry + '\n', 'utf-8');
+
+    console.log(`[HAZMAT   ]  Accepted envelope from ${envelope.metadata.source_node_id} (intercepted_by: ${(envelope as Record<string, unknown>)['intercepted_by'] ?? 'unset'})`);
+    jsonResponse(res, 202, {
+      accepted: true,
+      source_node_id: envelope.metadata.source_node_id,
+      received_at: new Date().toISOString(),
+    });
+    return;
+  }
+
+  // ── POST /api/v1/reports/dispatch ──────────────────────────────────────────
+  // Receives JournalismReports (clean interview output) from field RuvBots.
+  // Validates structure, appends to reports log for downstream analysis.
+  if (req.method === 'POST' && url === '/api/v1/reports/dispatch') {
+    const ct = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+    if (ct !== 'application/json') {
+      res.writeHead(415).end('Expected Content-Type: application/json');
+      return;
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse((await readBody(req)).toString('utf-8'));
+    } catch {
+      res.writeHead(400).end('Invalid JSON');
+      return;
+    }
+
+    const parsed = JournalismReportSchema.safeParse(body);
+    if (!parsed.success) {
+      console.log(`[REPORT   ]  REJECTED — schema validation failed`);
+      jsonResponse(res, 422, { error: 'Invalid JournalismReport', issues: parsed.error.issues });
+      return;
+    }
+
+    const report = parsed.data;
+
+    // Freshness check — same 5-minute window as HazmatEnvelope.
+    const now = Date.now();
+    const ts  = new Date(report.submitted_at).getTime();
+    if (ts < now - 300_000 || ts > now + 60_000) {
+      console.log(`[REPORT   ]  REJECTED — stale or future-dated report from ${report.source_node_id}`);
+      jsonResponse(res, 422, { error: 'Report timestamp outside freshness window' });
+      return;
+    }
+
+    // Append to reports log.
+    const logEntry = JSON.stringify({
+      ...report,
+      received_at: new Date().toISOString(),
+    });
+    await mkdir(dirname(REPORTS_FILE), { recursive: true });
+    await appendFile(REPORTS_FILE, logEntry + '\n', 'utf-8');
+
+    console.log(`[REPORT   ]  Accepted report ${report.report_id} from ${report.source_node_id} (${report.beads.length} beads, profile: ${report.moltbook_profile_id})`);
+    jsonResponse(res, 202, {
+      accepted: true,
+      report_id: report.report_id,
+      bead_count: report.beads.length,
+      received_at: new Date().toISOString(),
+    });
+    return;
+  }
+
   res.writeHead(404).end('Not Found');
 }
 
@@ -626,7 +736,7 @@ async function bootstrap(): Promise<void> {
   server.listen(PORT, '127.0.0.1', () => {
     const src = surgeon.constructor.name;
     console.log('╔══════════════════════════════════════════════════════════════╗');
-    console.log("║  Motha'Ship PoC Server — Phase P9                            ║");
+    console.log("║  Motha'Ship PoC Server — Phase P10                           ║");
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Submit:   POST http://127.0.0.1:${PORT}/poc/submit             ║`);
     console.log(`║  Queue:    GET  http://127.0.0.1:${PORT}/poc/queue              ║`);
@@ -634,6 +744,9 @@ async function bootstrap(): Promise<void> {
     console.log(`║  Flush:    POST http://127.0.0.1:${PORT}/poc/flush              ║`);
     console.log(`║  Promote:  POST http://127.0.0.1:${PORT}/poc/promote/:id        ║`);
     console.log(`║  Discard:  POST http://127.0.0.1:${PORT}/poc/discard/:id        ║`);
+    console.log('╠══════════════════════════════════════════════════════════════╣');
+    console.log(`║  Hazmat:   POST http://127.0.0.1:${PORT}/api/v1/telemetry/hazmat║`);
+    console.log(`║  Reports:  POST http://127.0.0.1:${PORT}/api/v1/reports/dispatch║`);
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Quarantine: ${QUARANTINE_FILE.slice(-50).padEnd(50)} ║`);
     console.log('╚══════════════════════════════════════════════════════════════╝');
