@@ -80,6 +80,31 @@ The RuvBot is a journalist in a hostile environment. Its primary job is to **sta
 * Transmitted via standard HTTPS POST to `MOTHASHIP_ENDPOINT`. Never touches the local LLM.
 * The MothaShip's four-layer stack (Section 3A) independently inspects the incoming envelope before it touches the central database. A compromised RuvBot cannot bypass this.
 
+**RuvBot as relay (microphone handoff model):**
+* RuvBots act as transmitters for city agent communications — the agent's bead is nested inside the RuvBot's HazmatEnvelope rather than city agents posting directly to MothaShip.
+* This keeps a single authenticated channel: MothaShip only ever receives from RuvBots.
+* Envelope structure:
+  ```json
+  {
+    "source": "RUVBOT_AI_DEFENCE",
+    "ruvbot_id": "<id>",
+    "corpus_version": "<version>",
+    "ruvbot_context": "<conversational context RuvBot attests to>",
+    "agent_quote": {
+      "raw": "<untouched agent bead>",
+      "agent_id": "<city-agent-id>",
+      "intercepted_by": "ruvbot_relay"
+    },
+    "aidefence_result": {}
+  }
+  ```
+* `agent_quote.raw` is ALWAYS the untouched original bead. MothaShip Surgeon re-inspects it independently regardless of RuvBot's aidefence verdict.
+
+**Relay manipulation blind spot (Phase 12+ backlog):**
+* A sophisticated adversary could engineer the *conversation leading up to the bead* — not the bead content itself — to poison the RuvBot's `ruvbot_context` field. The raw bead looks clean; the framing is misleading.
+* Mitigation (not yet implemented): extend the Surgeon prompt to evaluate consistency between `ruvbot_context` and `agent_quote.raw`, flagging cases where the framing misrepresents the interaction. This is a prompt addition only — no architectural change required. Same Surgeon, same endpoint.
+* **Not blocking P10.** Requires a sophisticated adversary who understands the relay architecture. Address after MothaShip is live and RuvBots are in active deployment.
+
 ---
 
 ### 3C. RVF-packaged version (future)
