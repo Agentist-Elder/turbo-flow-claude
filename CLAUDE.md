@@ -50,7 +50,7 @@ The MothaShip is a live API endpoint on the public internet holding the global d
 
 **Layer 4 — Coherence layer (semantic HNSW backstop):**
 * Our custom-built vector infrastructure (MiniLM-L6-v2 + ruvector HNSW). Redundant depth for zero-days that pass Layers 1–3. Retained alongside aidefence — defense-in-depth, not replacement.
-* **PRODUCTION TODO — Cold-start seeding required:** Layer 4 requires a pre-seeded `ruvbot-coherence.db` (809 attack vectors via MiniLM-L6-v2 ONNX). Run `npx tsx scripts/provision-model.ts` then `npx tsx scripts/seed-red-team.ts` on first deploy. CI skips the coherence tests (`red-team-coherence.spec.ts`, `coherence-gate-wiring.spec.ts`, `vector-scanner.spec.ts`) because they require this seeded DB — see `vitest.config.ts`. These tests MUST be run locally before any production deployment to confirm Layer 4 is functional.
+* **Cold-start seeding DONE (2026-03-15):** `ruvbot-coherence.db` seeded on DO droplet with 809 attack vectors via MiniLM-L6-v2 ONNX. For any new deployment: run `npx tsx scripts/provision-model.ts` then `npx tsx scripts/seed-red-team.ts` from the project root. CI skips the coherence tests (`red-team-coherence.spec.ts`, `coherence-gate-wiring.spec.ts`, `vector-scanner.spec.ts`) because they require this seeded DB — see `vitest.config.ts`.
 
 **Internal Hazmat Path (MothaShip self-interceptions):**
 * When the MothaShip's own layers intercept an attack, the HazmatEnvelope cannot be sent back over the network (recursive loop). Instead it is appended to a local log:

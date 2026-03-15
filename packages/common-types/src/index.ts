@@ -4,6 +4,7 @@
 export {
   HazmatEnvelopeSchema,
   createHazmatEnvelope,
+  validateFreshness,
 } from './hazmat-envelope.js';
 
 export type { HazmatEnvelope, HazmatEnvelopeShape, IHazmatEnvelope } from './hazmat-envelope.js';
