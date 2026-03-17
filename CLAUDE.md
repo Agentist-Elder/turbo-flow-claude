@@ -32,7 +32,7 @@ The MothaShip is a live API endpoint on the public internet holding the global d
 * On hit: immediately wraps raw payload in HazmatEnvelope tagged `intercepted_by: "CORPUS_GATE"` and `corpus_version: <current_version>`, dispatches to internal sinkhole queue (see Section 3A — Internal Hazmat Path). Drops the connection.
 * On miss (prompt passes): hands to Layer 2.
 * Cold-start: corpus gate must be fully loaded before `app.listen()` opens the port. See Section 4 for boot sequence.
-* **`@ruvector/mincut-wasm` is 404 on npm (npm-verified 2026-03-11).** Pure-TypeScript Stoer-Wagner is permanent until further notice. **Periodic check:** run `npm view @ruvector/mincut-wasm version` at the start of each new sprint. If it publishes, evaluate before replacing the TS implementation — do not assume a drop-in swap.
+* **`@ruvector/mincut-wasm@0.1.0` published 2026-03-17.** INSTALLED. `WasmMinCut` (dynamic algorithm) panics in Node.js on `std::time::SystemTime` — built for browser target only (filed for Ruv). `WasmLocalKCut` works in Node.js and is wired into `runGate()`. Pure-TypeScript Stoer-Wagner (`stoer-wagner.ts`) is RETAINED for the async auditor star-graph path — not replaced. `WASM_LOCAL_KCUT_THRESHOLD = 1.40` is a conservative initial estimate; recalibrate after 48h of live traffic. `WasmThreeLevelHierarchy.globalMinCut()` returns -0 for star graphs — unsuitable for our V≤6 use case.
 
 **Layer 2 — aidefence fast-path (<50ms):**
 * `npm install aidefence`. 183+ patterns + ReflexionMemory KNN vote.

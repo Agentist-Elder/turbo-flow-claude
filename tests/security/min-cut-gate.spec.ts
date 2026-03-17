@@ -11,17 +11,21 @@
  *   (f) runGate fallback does not fabricate a blocked/unblocked verdict
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
 import {
   DB_CONFIG,
   FAST_PATH_BUDGET_MS,
   L3_BUDGET_MS,
   SEMANTIC_COHERENCE_THRESHOLD,
+  STAR_MINCUT_THRESHOLD,
+  WASM_LOCAL_KCUT_THRESHOLD,
   polylogThreshold,
   estimateLambda,
   MinCutGate,
   SessionThreatState,
   runGate,
+  initMinCutWasm,
+  getWasmStatus,
   type GateDecision,
 } from '../../src/security/min-cut-gate.js';
 
@@ -230,9 +234,9 @@ describe('MinCutGate — cold start', () => {
   });
 });
 
-// ── (f) runGate fallback correctness ────────────────────────────────
+// ── (f) runGate fallback correctness (WASM not initialized) ─────────
 
-describe('runGate — fallback does not fabricate verdicts', () => {
+describe('runGate — fallback does not fabricate verdicts (WASM not initialized)', () => {
   const makeDecision = (route: 'L3_Gate' | 'MinCut_Gate'): GateDecision => ({
     route, lambda: 5, threshold: 4, db_size: 10, reason: 'test',
   });
@@ -245,7 +249,7 @@ describe('runGate — fallback does not fabricate verdicts', () => {
     expect(result.gate).toBe('L3_Gate_fallback');
   });
 
-  it('MinCut_Gate route falls back to L3_Gate_fallback (WASM not installed)', async () => {
+  it('MinCut_Gate route falls back to L3_Gate_fallback when WASM not initialized', async () => {
     const verdict = { blocked: true, reason: 'threat detected' };
     const result = await runGate(makeDecision('MinCut_Gate'), verdict, []);
     // Fallback must NOT change the blocked state — no fabrication
@@ -270,5 +274,106 @@ describe('runGate — fallback does not fabricate verdicts', () => {
     const decision = makeDecision('L3_Gate');
     const result = await runGate(decision, { blocked: false, reason: '' }, []);
     expect(result.lambda).toBe(decision.lambda);
+  });
+});
+
+// ── (g) runGate WASM path ─────────────────────────────────────────────
+
+describe('runGate — WASM MinCut_Gate path (after initMinCutWasm)', () => {
+  beforeEach(() => {
+    initMinCutWasm();
+  });
+
+  const makeDecision = (route: 'L3_Gate' | 'MinCut_Gate'): GateDecision => ({
+    route, lambda: 5, threshold: 4, db_size: 10, reason: 'test',
+  });
+
+  it('L3_Gate route still returns l3Verdict unchanged (WASM does not affect L3 path)', async () => {
+    const verdict = { blocked: false, reason: 'clean' };
+    const result = await runGate(makeDecision('L3_Gate'), verdict, [0.3, 0.4, 0.5]);
+    expect(result.blocked).toBe(false);
+    expect(result.gate).toBe('L3_Gate_fallback');
+  });
+
+  it('MinCut_Gate with tight cluster (attack-like) returns gate=MinCut_Gate and blocked=true', async () => {
+    // Small cosine distances → high similarity → tight cluster → attack-like
+    // WasmLocalKCut cut-sum ≈ 2.11-2.79 for calibration attack distances → above WASM_LOCAL_KCUT_THRESHOLD
+    const tightDistances = [0.30, 0.35, 0.28, 0.32, 0.31];
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: false, reason: 'l3 clean' }, tightDistances);
+    expect(result.gate).toBe('MinCut_Gate');
+    expect(typeof result.lambda).toBe('number');
+    expect(result.blocked).toBe(true);
+    expect(result.lambda).toBeGreaterThan(WASM_LOCAL_KCUT_THRESHOLD);
+  });
+
+  it('MinCut_Gate with sparse cluster (clean-like) returns gate=MinCut_Gate and blocked=false', async () => {
+    // Large cosine distances → low similarity → sparse → clean-like
+    // WasmLocalKCut cut-sum ≈ 0.64-0.71 for calibration clean distances → below WASM_LOCAL_KCUT_THRESHOLD
+    const sparseDistances = [0.75, 0.80, 0.78, 0.82, 0.76];
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: true, reason: 'l3 blocked' }, sparseDistances);
+    expect(result.gate).toBe('MinCut_Gate');
+    expect(result.blocked).toBe(false);
+    expect(result.lambda).toBeLessThan(WASM_LOCAL_KCUT_THRESHOLD);
+  });
+
+  it('WASM result reason includes lambda and threshold', async () => {
+    const distances = [0.1, 0.15, 0.12];
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: false, reason: '' }, distances);
+    expect(result.reason).toMatch(/WASM MinCut: λ=/);
+    expect(result.reason).toMatch(/threshold=/);
+  });
+});
+
+// ── (h) Input validation — bypass hardening (Findings 1-3) ───────────
+
+describe('runGate — input validation bypass hardening', () => {
+  beforeAll(() => { initMinCutWasm(); });
+
+  const makeDecision = (route: 'L3_Gate' | 'MinCut_Gate'): GateDecision => ({
+    route, lambda: 5, threshold: 4, db_size: 10, reason: 'test',
+  });
+
+  it('NaN distances fall back to L3_Gate_fallback (Finding 1: full bypass prevented)', async () => {
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: true, reason: 'l3 blocked' }, [NaN, NaN, NaN]);
+    expect(result.gate).toBe('L3_Gate_fallback');
+    expect(result.blocked).toBe(true); // l3Verdict preserved, not bypassed
+  });
+
+  it('Infinity distances fall back to L3_Gate_fallback (Finding 1: Infinity treated as invalid)', async () => {
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: true, reason: 'l3 blocked' }, [Infinity, Infinity]);
+    expect(result.gate).toBe('L3_Gate_fallback');
+    expect(result.blocked).toBe(true);
+  });
+
+  it('mixed NaN and valid distances uses only valid entries', async () => {
+    // NaN stripped, valid distances proceed to WASM
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: false, reason: '' }, [NaN, 0.30, NaN, 0.32]);
+    expect(result.gate).toBe('MinCut_Gate'); // valid distances survived filtering
+  });
+
+  it('distances >= 1.0 produce minimum weight edges, not zero (Finding 3: neighbor not erased)', async () => {
+    // d=1.0 → raw weight=0 → clamped to 1e-9 → edge exists, not silently erased
+    // Result is still gate=MinCut_Gate (WASM ran), not fallback
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: false, reason: '' }, [1.0, 1.0, 1.0]);
+    expect(result.gate).toBe('MinCut_Gate');
+  });
+
+  it('negative distances fall back to L3_Gate_fallback (invalid input)', async () => {
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: true, reason: 'l3' }, [-0.5, -1.0]);
+    expect(result.gate).toBe('L3_Gate_fallback');
+    expect(result.blocked).toBe(true);
+  });
+});
+
+// ── (i) getWasmStatus export (Finding 5) ────────────────────────────
+
+describe('getWasmStatus', () => {
+  it('returns { initialized: true } after initMinCutWasm()', () => {
+    initMinCutWasm(); // idempotent
+    expect(getWasmStatus().initialized).toBe(true);
+  });
+
+  it('initialized is a boolean', () => {
+    expect(typeof getWasmStatus().initialized).toBe('boolean');
   });
 });
