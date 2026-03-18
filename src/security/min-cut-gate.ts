@@ -19,10 +19,12 @@
 
 import { readFileSync } from 'fs';
 import { createRequire } from 'module';
-// WasmMinCut (dynamic algorithm) panics on std::time::SystemTime::now() in
-// Node.js (wasm32-unknown-unknown, v0.1.0 built for browser target).
-// Filed for Ruv: package needs --target nodejs or wasi build for server use.
-// WasmLocalKCut is pure graph-traversal — no time calls — works in Node.js.
+// WasmMinCut (dynamic algorithm) panicked in Node.js on std::time::Instant
+// (wasm32-unknown-unknown has no system clock). Fixed in ruvnet/RuVector PR #268
+// (merged 2026-03-18): time_compat module replaces Instant with a monotonic counter.
+// Upgrade path: once @ruvector/mincut-wasm@>0.1.0 is published, replace WasmLocalKCut
+// with WasmMinCut in runGate() for the full dynamic Stoer-Wagner algorithm.
+// WasmLocalKCut is pure graph-traversal — no time calls — works in Node.js today.
 import { initSync, WasmLocalKCut } from '@ruvector/mincut-wasm';
 
 let wasmInitialized = false;
@@ -118,6 +120,29 @@ export const PARTITION_RATIO_THRESHOLD = 1.0;
 export const STAR_MINCUT_THRESHOLD = 0.40;
 
 /**
+ * Maximum number of kNN distances accepted by runGate().
+ *
+ * Matches DB_CONFIG.efSearch (100) — the HNSW search never returns more
+ * candidates than efSearch, so any caller supplying more has either
+ * misconfigured the pipeline or is attempting a DoS via an oversized graph.
+ * Exceeding this limit triggers L3_Gate_fallback, not a throw, so the server
+ * stays responsive.
+ */
+export const MAX_KNN_DISTANCES = 100;
+
+/**
+ * Maximum valid cosine distance for MiniLM-L6-v2 normalized embeddings.
+ *
+ * all-MiniLM-L6-v2 produces unit vectors; cosine distance = 1 − cosine_sim
+ * is therefore in [0, 1]. A distance > 1.0 indicates either un-normalized
+ * vectors (embedding pipeline bug) or an attacker shifting output to force
+ * all edge weights to 1e-9 (silent evasion, AQE Finding 4).
+ * Distances in (1.0, 2.0] map to negative similarity — meaningless for
+ * neighbor-based threat detection. Reject them; do not silently clamp.
+ */
+export const MAX_KNN_DISTANCE = 1.0;
+
+/**
  * WasmLocalKCut cut-sum threshold for runGate() MinCut_Gate path.
  *
  * WasmLocalKCut.query(source) returns the sum of edge weights in local cuts
@@ -184,7 +209,12 @@ export function polylogThreshold(n: number): number {
  */
 export function estimateLambda(knnDistances: number[]): number {
   if (knnDistances.length === 0) return 0;
-  const avg = knnDistances.reduce((a, b) => a + b, 0) / knnDistances.length;
+  // Runtime type guard: deserialized external data may carry non-number values
+  // despite the TypeScript signature. Filter before reduce to prevent NaN
+  // propagation that would silently poison the lambda estimate (AQE Finding 3).
+  const numeric = knnDistances.filter(d => typeof d === 'number' && Number.isFinite(d));
+  if (numeric.length === 0) return 0;
+  const avg = numeric.reduce((a, b) => a + b, 0) / numeric.length;
   return avg > 1e-9 ? 1 / avg : Number.MAX_SAFE_INTEGER;
 }
 
@@ -253,6 +283,17 @@ export interface L3Verdict {
 export interface MinCutResult extends L3Verdict {
   gate: 'MinCut_Gate' | 'L3_Gate_fallback';
   lambda: number;
+  /**
+   * UTC epoch milliseconds (Date.now()) stamped by Node.js the moment the
+   * gate verdict is produced.
+   *
+   * Required because the WASM module uses a monotonic counter (not a real
+   * clock) since PR #268 — it cannot self-timestamp. All downstream telemetry
+   * (HazmatEnvelopes, audit logs) MUST use this field; do not call Date.now()
+   * again downstream or the envelope timestamp will drift from the actual
+   * gate decision time.
+   */
+  verdictTimestamp: number;
 }
 
 /**
@@ -357,6 +398,15 @@ export function applyConsensusVoting(input: ConsensusInput): ConsensusResult {
 
 // ── Gate Execution ────────────────────────────────────────────────────────────
 
+/**
+ * Freeze a MinCutResult so downstream code cannot mutate blocked, reason,
+ * or verdictTimestamp after the gate decision is made (AQE Finding 1 —
+ * replay / prototype-pollution hardening).
+ */
+function freeze(result: MinCutResult): MinCutResult {
+  return Object.freeze(result);
+}
+
 export async function runGate(
   decision: GateDecision,
   l3Verdict: L3Verdict,
@@ -365,25 +415,38 @@ export async function runGate(
   if (decision.route === 'MinCut_Gate') {
     if (!wasmInitialized) {
       console.warn('[MinCutGate] MinCut_Gate selected but WASM not initialized — falling back to L3_Gate verdict. Call initMinCutWasm() at boot.');
-      return { ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda };
+      return freeze({ ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda, verdictTimestamp: Date.now() });
     }
 
     try {
-      // Input validation (Findings 1-3): strip NaN/Infinity and clamp to [0, 1].
-      // Distances ≥ 1.0 produce zero-weight edges that silently erase neighbors
-      // from the cut computation, artificially lowering cutSum below the threshold.
-      // If no finite distances survive filtering, fall back to L3 verdict rather
-      // than returning cutSum=0 which would always pass (Finding 2).
-      const validDistances = knnDistances.filter(d => Number.isFinite(d) && d >= 0);
+      // DoS guard (AQE Finding 2): cap graph size before entering the WASM loop.
+      // An attacker-influenced kNN source could supply hundreds of distances,
+      // causing WasmLocalKCut to build a massive graph and hang the event loop.
+      // MAX_KNN_DISTANCES matches efSearch — any excess is a pipeline misconfiguration
+      // or an attack; fall back rather than process.
+      if (knnDistances.length > MAX_KNN_DISTANCES) {
+        console.warn(`[MinCutGate] knnDistances.length=${knnDistances.length} exceeds MAX_KNN_DISTANCES=${MAX_KNN_DISTANCES} — falling back to L3_Gate verdict.`);
+        return freeze({ ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda, verdictTimestamp: Date.now() });
+      }
+
+      // Input validation: strip non-finite, negative, and out-of-range distances.
+      // Distances > MAX_KNN_DISTANCE (1.0) indicate un-normalized vectors or an
+      // attacker shifting embeddings to force all edge weights to 1e-9, producing
+      // cutSum ≈ 0 and a silent blocked=false verdict (AQE Finding 4).
+      // If no valid distances survive, fall back rather than return cutSum=0.
+      const validDistances = knnDistances.filter(
+        d => Number.isFinite(d) && d >= 0 && d <= MAX_KNN_DISTANCE,
+      );
       if (validDistances.length === 0) {
         console.warn('[MinCutGate] No valid knnDistances after filtering — falling back to L3_Gate verdict.');
-        return { ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda };
+        return freeze({ ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda, verdictTimestamp: Date.now() });
       }
 
       // Build star graph via WasmLocalKCut: node 0 = query, nodes 1..k = kNN neighbors.
       // WasmLocalKCut.query(0n) returns local cuts around node 0. The sum of
       // cut_values discriminates attack clusters (high) from clean regions (low).
-      // Note: WasmMinCut panics in Node.js (std::time, browser-only build v0.1.0).
+      // TODO: upgrade to WasmMinCut once @ruvector/mincut-wasm@>0.1.0 is published
+      // (PR #268 merged 2026-03-18 — fixes std::time::Instant panic in Node.js).
       const lkc = new WasmLocalKCut(BigInt(10), 1000.0, 2.0);
       for (let i = 0; i < validDistances.length; i++) {
         // Clamp weight to (0, 1] — zero-weight edges are meaningless for min-cut.
@@ -395,20 +458,26 @@ export async function runGate(
 
       const cutSum = cuts.reduce((acc, c) => acc + c.cut_value, 0);
 
+      // Stamp the verdict time NOW, immediately after WASM returns.
+      // The WASM module uses a monotonic counter (not a real clock) since PR #268 —
+      // it cannot self-timestamp. This is the authoritative gate decision time.
+      const verdictTimestamp = Date.now();
+
       // High cut-sum → tight cluster near known attacks → blocked.
       // Calibrated: attack ≈ 2.11–2.79, clean ≈ 0.64–0.71. Threshold: 1.40 (conservative).
       const blocked = cutSum >= WASM_LOCAL_KCUT_THRESHOLD;
-      return {
+      return freeze({
         blocked,
         reason: `WASM MinCut: λ=${cutSum.toFixed(3)} ${blocked ? '>=' : '<'} threshold=${WASM_LOCAL_KCUT_THRESHOLD}`,
         gate: 'MinCut_Gate',
         lambda: cutSum,
-      };
+        verdictTimestamp,
+      });
     } catch (err) {
       console.warn('[MinCutGate] WASM computation error — falling back to L3_Gate verdict:', err);
-      return { ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda };
+      return freeze({ ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda, verdictTimestamp: Date.now() });
     }
   }
 
-  return { ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda };
+  return freeze({ ...l3Verdict, gate: 'L3_Gate_fallback', lambda: decision.lambda, verdictTimestamp: Date.now() });
 }

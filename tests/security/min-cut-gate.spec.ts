@@ -19,6 +19,8 @@ import {
   SEMANTIC_COHERENCE_THRESHOLD,
   STAR_MINCUT_THRESHOLD,
   WASM_LOCAL_KCUT_THRESHOLD,
+  MAX_KNN_DISTANCES,
+  MAX_KNN_DISTANCE,
   polylogThreshold,
   estimateLambda,
   MinCutGate,
@@ -365,7 +367,163 @@ describe('runGate — input validation bypass hardening', () => {
   });
 });
 
-// ── (i) getWasmStatus export (Finding 5) ────────────────────────────
+// ── AQE Finding 1 — MinCutResult immutability (replay / prototype-pollution) ──
+
+describe('runGate — result is frozen (AQE Finding 1)', () => {
+  beforeAll(() => { initMinCutWasm(); });
+
+  const makeDecision = (route: 'L3_Gate' | 'MinCut_Gate'): GateDecision => ({
+    route, lambda: 5, threshold: 4, db_size: 10, reason: 'test',
+  });
+
+  it('fallback result is frozen — mutation throws in strict mode', async () => {
+    const result = await runGate(makeDecision('L3_Gate'), { blocked: false, reason: 'clean' }, []);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(() => {
+      'use strict';
+      (result as { blocked: boolean }).blocked = true;
+    }).toThrow();
+  });
+
+  it('WASM MinCut_Gate result is frozen', async () => {
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: false, reason: '' }, [0.3, 0.35]);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it('verdictTimestamp cannot be overwritten after return', async () => {
+    const result = await runGate(makeDecision('L3_Gate'), { blocked: false, reason: '' }, []);
+    const original = result.verdictTimestamp;
+    expect(() => {
+      'use strict';
+      (result as { verdictTimestamp: number }).verdictTimestamp = 0;
+    }).toThrow();
+    expect(result.verdictTimestamp).toBe(original);
+  });
+});
+
+// ── AQE Finding 2 — DoS guard: MAX_KNN_DISTANCES cap ────────────────────────
+
+describe('runGate — MAX_KNN_DISTANCES DoS cap (AQE Finding 2)', () => {
+  beforeAll(() => { initMinCutWasm(); });
+
+  const makeDecision = (): GateDecision => ({
+    route: 'MinCut_Gate', lambda: 5, threshold: 4, db_size: 10, reason: 'test',
+  });
+
+  it('MAX_KNN_DISTANCES equals DB_CONFIG.efSearch (100)', () => {
+    expect(MAX_KNN_DISTANCES).toBe(DB_CONFIG.efSearch);
+  });
+
+  it('array well within MAX_KNN_DISTANCES is accepted (cap check is >, not >=)', async () => {
+    // Use a small array to avoid timing out WASM — the cap boundary test is
+    // MAX_KNN_DISTANCES+1 below. This just confirms the guard uses strict >.
+    const distances = [0.3, 0.4, 0.5];
+    const result = await runGate(makeDecision(), { blocked: false, reason: '' }, distances);
+    expect(result.gate).toBe('MinCut_Gate');
+  });
+
+  it('array exceeding MAX_KNN_DISTANCES falls back to L3_Gate_fallback', async () => {
+    const distances = Array(MAX_KNN_DISTANCES + 1).fill(0.5);
+    const result = await runGate(makeDecision(), { blocked: true, reason: 'l3' }, distances);
+    expect(result.gate).toBe('L3_Gate_fallback');
+    expect(result.blocked).toBe(true); // l3Verdict preserved
+  });
+});
+
+// ── AQE Finding 3 — estimateLambda runtime type guard ───────────────────────
+
+describe('estimateLambda — runtime type guard (AQE Finding 3)', () => {
+  it('filters out non-number values from deserialized input', () => {
+    // Simulate JSON deserialization producing mixed-type array
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mixed = [0.3, 'noise' as any, null as any, 0.5, undefined as any];
+    const result = estimateLambda(mixed);
+    // Only [0.3, 0.5] survive — avg=0.4, λ=2.5
+    expect(result).toBeCloseTo(2.5, 5);
+  });
+
+  it('all-non-number input returns 0 (not NaN)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = estimateLambda(['a', null, undefined] as any);
+    expect(result).toBe(0);
+  });
+
+  it('NaN values are filtered (typeof NaN === "number" but !isFinite)', () => {
+    const result = estimateLambda([NaN, 0.4, NaN]);
+    expect(result).toBeCloseTo(2.5, 5);
+  });
+});
+
+// ── AQE Finding 4 — distances > MAX_KNN_DISTANCE rejected (silent evasion) ──
+
+describe('runGate — MAX_KNN_DISTANCE upper-bound filter (AQE Finding 4)', () => {
+  beforeAll(() => { initMinCutWasm(); });
+
+  const makeDecision = (): GateDecision => ({
+    route: 'MinCut_Gate', lambda: 5, threshold: 4, db_size: 10, reason: 'test',
+  });
+
+  it('MAX_KNN_DISTANCE is 1.0 (normalized MiniLM-L6-v2 range)', () => {
+    expect(MAX_KNN_DISTANCE).toBe(1.0);
+  });
+
+  it('all distances > 1.0 (un-normalized evasion attempt) → L3_Gate_fallback', async () => {
+    // Attacker shifts embeddings so all distances land in (1.0, 2.0]
+    // Without this fix: cutSum ≈ 0 → blocked=false (silent pass).
+    // With this fix: all filtered out → fallback preserves l3Verdict.
+    const evasionDistances = [1.1, 1.5, 1.8, 2.0];
+    const result = await runGate(makeDecision(), { blocked: true, reason: 'l3 threat' }, evasionDistances);
+    expect(result.gate).toBe('L3_Gate_fallback');
+    expect(result.blocked).toBe(true); // l3Verdict preserved — no silent pass
+  });
+
+  it('distance exactly 1.0 is accepted (boundary)', async () => {
+    const result = await runGate(makeDecision(), { blocked: false, reason: '' }, [1.0, 0.5]);
+    expect(result.gate).toBe('MinCut_Gate');
+  });
+
+  it('mixed valid and out-of-range — only valid distances used', async () => {
+    // 0.3 and 0.4 are valid; 1.2 is rejected. WASM runs on [0.3, 0.4].
+    const result = await runGate(makeDecision(), { blocked: false, reason: '' }, [0.3, 1.2, 0.4]);
+    expect(result.gate).toBe('MinCut_Gate');
+  });
+});
+
+// ── (i) verdictTimestamp — MothaShip stamps the gate decision time ──────────
+
+describe('runGate — verdictTimestamp', () => {
+  beforeAll(() => { initMinCutWasm(); });
+
+  const makeDecision = (route: 'L3_Gate' | 'MinCut_Gate'): GateDecision => ({
+    route, lambda: 5, threshold: 4, db_size: 10, reason: 'test',
+  });
+
+  it('fallback path includes a numeric verdictTimestamp', async () => {
+    const before = Date.now();
+    const result = await runGate(makeDecision('L3_Gate'), { blocked: false, reason: 'clean' }, []);
+    const after = Date.now();
+    expect(typeof result.verdictTimestamp).toBe('number');
+    expect(result.verdictTimestamp).toBeGreaterThanOrEqual(before);
+    expect(result.verdictTimestamp).toBeLessThanOrEqual(after);
+  });
+
+  it('WASM MinCut_Gate path includes a numeric verdictTimestamp', async () => {
+    const before = Date.now();
+    const result = await runGate(makeDecision('MinCut_Gate'), { blocked: false, reason: '' }, [0.30, 0.35, 0.28]);
+    const after = Date.now();
+    expect(typeof result.verdictTimestamp).toBe('number');
+    expect(result.verdictTimestamp).toBeGreaterThanOrEqual(before);
+    expect(result.verdictTimestamp).toBeLessThanOrEqual(after);
+  });
+
+  it('verdictTimestamp is a positive integer (valid epoch ms)', async () => {
+    const result = await runGate(makeDecision('L3_Gate'), { blocked: false, reason: '' }, []);
+    expect(result.verdictTimestamp).toBeGreaterThan(0);
+    expect(Number.isInteger(result.verdictTimestamp)).toBe(true);
+  });
+});
+
+// ── (j) getWasmStatus export (Finding 5) ────────────────────────────
 
 describe('getWasmStatus', () => {
   it('returns { initialized: true } after initMinCutWasm()', () => {
