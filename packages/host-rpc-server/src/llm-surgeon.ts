@@ -36,6 +36,10 @@ export interface ISurgeon {
   analyze(text: string): Promise<SurgeonResult>;
 }
 
+/** Hard cap on input length before any LLM call — prevents oversized payloads
+ *  from exhausting context or burying injected instructions deep in content. */
+const MAX_ANALYZE_CHARS = 4_000;
+
 // ---------------------------------------------------------------------------
 // Gemini Surgeon
 // ---------------------------------------------------------------------------
@@ -67,13 +71,14 @@ export class GeminiSurgeon implements ISurgeon {
   }
 
   async analyze(text: string): Promise<SurgeonResult> {
+    const input = text.length > MAX_ANALYZE_CHARS ? text.slice(0, MAX_ANALYZE_CHARS) : text;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
 
     const requestBody = {
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{
         role:  'user',
-        parts: [{ text }],
+        parts: [{ text: input }],
       }],
       generationConfig: {
         temperature:      0.1,   // near-deterministic for classification
@@ -246,16 +251,17 @@ export class TribunalSurgeon implements ISurgeon {
   }
 
   async analyze(text: string): Promise<SurgeonResult> {
+    const input = text.length > MAX_ANALYZE_CHARS ? text.slice(0, MAX_ANALYZE_CHARS) : text;
     // Step 1: Hunter and Explainer run in parallel
     const [hunterRaw, explainerRaw] = await Promise.all([
-      callGeminiRaw(this.apiKey, this.model, HUNTER_PROMPT, text),
-      callGeminiRaw(this.apiKey, this.model, EXPLAINER_PROMPT, text),
+      callGeminiRaw(this.apiKey, this.model, HUNTER_PROMPT, input),
+      callGeminiRaw(this.apiKey, this.model, EXPLAINER_PROMPT, input),
     ]);
 
     // Step 2: Arbiter receives original text + both structured findings
     const arbiterUserText = [
       'ORIGINAL INTERACTION:',
-      text,
+      input,
       '',
       'THREAT HUNTER FINDINGS:',
       JSON.stringify(hunterRaw, null, 2),

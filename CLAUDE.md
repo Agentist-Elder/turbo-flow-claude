@@ -1,7 +1,7 @@
 # Master Swarm Directive: The Mothership Architecture (Claude Flow V3)
 
 **STATUS:** ACTIVE
-**DATE:** 2026-03-11 (revised from 02-27-2026)
+**DATE:** 2026-03-20 (revised from 2026-03-11)
 **TARGET:** Autonomous Tri-System Construction & Execution
 
 This document is the absolute ground truth for all swarm agents. You are building and operating a high-stakes, autonomous Financial and Threat-Intelligence AI Swarm. Do not deviate from these structural or operational laws.
@@ -41,7 +41,7 @@ The MothaShip is a live API endpoint on the public internet holding the global d
 * Role: The "Bodyguard." Catches what the corpus gate misses — homoglyph attacks, behavioral anomalies, PII leaks, zero-day novel vocabulary.
 * **Persistence is mandatory:** configure `agentdb: { path: './data/threats.db' }`. Default `:memory:` wipes all learned patterns on restart.
 * **Detection confidence threshold: 0.9 (production decision).** Layer 2 only fast-blocks at ≥0.9 confidence. Below that, traffic flows to Layer 3 (LLM Surgeon). This is intentional — the Surgeon handles gray-zone cases. Do NOT lower this threshold without measuring false-positive impact first. The corpus gate (Layer 1) pre-filters known attacks, but this does not justify tightening the threshold before seeing real traffic data. Revisit after first 48 hours of live traffic using actual miss/false-positive rates.
-* **Learning loop:** feed every LLM Surgeon verdict back into ReflexionMemory so the fast-path learns from zero-days the Surgeon catches. **Learning gate: 0.70** — only Surgeon verdicts with confidence ≥0.70 are persisted. Too high = slow learning; too low = learns from uncertain calls. Review with production traffic data before changing.
+* **Learning loop:** feed every LLM Surgeon verdict back into ReflexionMemory so the fast-path learns from zero-days the Surgeon catches. **Learning gate: 0.70 + allowlist** — Surgeon verdicts are persisted only when ALL THREE conditions hold: (1) confidence ≥0.70, (2) `attackType !== 'benign'`, AND (3) `attackType` is in the `VALID_ATTACK_TYPES` allowlist. Gate logic lives in `shouldLearnFromSurgeon()` exported from `scripts/poc/poc-server.ts` — change the rule there. Storing `benign`-classified content as a `verdict: 'failure'` pattern would silently corrupt the KNN model into flagging legitimate traffic. Storing an arbitrary `attackType` string (from a manipulated Surgeon response) would poison the persistence layer with uncontrolled keys. Neither failure mode is detectable without auditing the stored patterns.
 * **Embedding note:** EmbeddingService uses TF-IDF + security-term weighting, not a transformer. Adequate for known patterns; novel vocabulary still reaches Layer 3.
 * On hit: wraps raw payload in HazmatEnvelope tagged `intercepted_by: "AI_DEFENCE"` and `corpus_version: <current_version>`, dispatches to internal sinkhole queue. Sanitized version continues if confidence < 0.9.
 * On pass: hands to Layer 3.
@@ -49,6 +49,17 @@ The MothaShip is a live API endpoint on the public internet holding the global d
 **Layer 3 — LLM Surgeon (deep path, ~1-2s):**
 * Required for payload excision. If a payload is partially malicious, the Surgeon surgically removes the contaminated portion so the safe remainder passes through. This is active sanitization, not theater. Block/allow alone is insufficient for partial threats.
 * Measured latency: ~1.9s (Gemini-2.5-flash). Binding metrics are queue throughput and backlog depth, not per-request latency.
+* **Hard input cap: 4,000 chars.** `analyze()` truncates all input before any LLM call (enforced in `llm-surgeon.ts` as of 2026-03-20). Oversized payloads can bury injected instructions deep in context or exhaust attention. Apply the same cap in `analyzeHazmat()` (see below).
+* **Two Surgeon modes — do not conflate:**
+  * **Detection mode** (`analyze(text)`) — used by `/poc/submit`. The Surgeon decides from scratch whether incoming text is suspicious. Hunter and Explainer evaluate the raw payload in parallel; Arbiter weighs both findings AND re-reads the original text to make the final call.
+  * **Classification mode** (`analyzeHazmat()` — **NOT YET BUILT**) — for processing `agent_quote.raw` from field HazmatEnvelopes. Suspicion is already established. The Surgeon classifies attack vector and characteristics only. **Stricter constraints apply — see hazmat worker pre-conditions below.**
+* **Hazmat worker pre-conditions (MANDATORY before building the worker that routes `agent_quote.raw` through the Surgeon):**
+  1. **Input cap** — already in `analyze()`; enforce identically in `analyzeHazmat()`.
+  2. **Arbiter isolation** — in classification mode the Arbiter receives only the Hunter and Explainer structured findings, NOT the raw payload again. Feeding hostile content to a third LLM call adds attack surface with no gain once two agents have already evaluated it.
+  3. **Provenance framing** — `analyzeHazmat()` system prompt must state that the content was already intercepted by a field agent. Reframes the task as classification, not detection. Reduces susceptibility to "I'm actually legitimate" framing inside the payload.
+  4. **`attackType !== 'benign'` gate** — already in `shouldLearnFromSurgeon()`; must remain.
+  5. **`attackType` allowlist validation** — already in `shouldLearnFromSurgeon()`; must remain.
+* **Current state (2026-03-20):** `POST /api/v1/telemetry/hazmat` accepts envelopes, validates schema and freshness, and appends raw envelopes to `.claude-flow/data/hazmat-log.jsonl`. The inner payload (`agent_quote.raw`) is **never passed to the Surgeon**. The hazmat intelligence loop is a stub — no poisoning risk, but also no threat intelligence extracted from field interceptions. Do NOT wire `agent_quote.raw` into the Surgeon until `analyzeHazmat()` is built with all five constraints above.
 
 **Layer 4 — Coherence layer (semantic HNSW backstop):**
 * Our custom-built vector infrastructure (MiniLM-L6-v2 + ruvector HNSW). Redundant depth for zero-days that pass Layers 1–3. Retained alongside aidefence — defense-in-depth, not replacement.

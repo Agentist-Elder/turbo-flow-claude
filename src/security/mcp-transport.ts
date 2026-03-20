@@ -239,7 +239,7 @@ export class MCPTransportAdapter {
       throw new Error('MCPTransportAdapter: client not connected');
     }
 
-    const exec = async (): Promise<unknown> => {
+    const executeTransport = async (): Promise<unknown> => {
       const timeoutOpts = this.config.requestTimeoutMs ? { timeout: this.config.requestTimeoutMs } : undefined;
       const response = await this.client!.callTool({ name: toolName, arguments: args }, undefined, timeoutOpts);
 
@@ -256,7 +256,7 @@ export class MCPTransportAdapter {
     };
 
     try {
-      const result = await exec();
+      const result = await executeTransport();
       this.breaker.recordSuccess();
       return result;
     } catch (err) {

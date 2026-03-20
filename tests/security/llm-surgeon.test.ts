@@ -369,6 +369,71 @@ describe('TribunalSurgeon', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Input length cap (MAX_ANALYZE_CHARS = 4000)
+// ---------------------------------------------------------------------------
+
+describe('input length cap', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('GeminiSurgeon truncates input > 4000 chars before sending to API', async () => {
+    const oversized = 'A'.repeat(6_000);
+    const geminiEnvelope = {
+      candidates: [{ content: { parts: [{ text: JSON.stringify(MOCK_GEMINI_RESULT) }] } }],
+    };
+
+    let capturedBody = '';
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: RequestInit) => {
+      capturedBody = opts.body as string;
+      return { ok: true, json: async () => geminiEnvelope, text: async () => '' };
+    }));
+
+    const surgeon = new GeminiSurgeon('test-api-key');
+    await surgeon.analyze(oversized);
+
+    const sentText = (JSON.parse(capturedBody) as { contents: Array<{ parts: Array<{ text: string }> }> })
+      .contents[0]!.parts[0]!.text;
+    expect(sentText.length).toBe(4_000);
+    expect(sentText).toBe('A'.repeat(4_000));
+  });
+
+  it('GeminiSurgeon passes input unchanged when <= 4000 chars', async () => {
+    const normal = 'B'.repeat(100);
+    const geminiEnvelope = {
+      candidates: [{ content: { parts: [{ text: JSON.stringify(MOCK_GEMINI_RESULT) }] } }],
+    };
+
+    let capturedBody = '';
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: RequestInit) => {
+      capturedBody = opts.body as string;
+      return { ok: true, json: async () => geminiEnvelope, text: async () => '' };
+    }));
+
+    const surgeon = new GeminiSurgeon('test-api-key');
+    await surgeon.analyze(normal);
+
+    const sentText = (JSON.parse(capturedBody) as { contents: Array<{ parts: Array<{ text: string }> }> })
+      .contents[0]!.parts[0]!.text;
+    expect(sentText).toBe(normal);
+  });
+
+  it('TribunalSurgeon truncates input > 4000 chars for Hunter call', async () => {
+    const oversized = 'C'.repeat(5_000);
+    let firstBody = '';
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: RequestInit) => {
+      if (!firstBody) firstBody = opts.body as string;
+      return makeGeminiEnvelope(MOCK_HUNTER);
+    }));
+
+    const surgeon = new TribunalSurgeon('test-key');
+    await surgeon.analyze(oversized).catch(() => { /* Arbiter parse error OK */ });
+
+    const sentText = (JSON.parse(firstBody) as { contents: Array<{ parts: Array<{ text: string }> }> })
+      .contents[0]!.parts[0]!.text;
+    expect(sentText.length).toBe(4_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createSurgeon factory
 // ---------------------------------------------------------------------------
 

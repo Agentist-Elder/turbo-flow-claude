@@ -164,6 +164,26 @@ async function enqueue(
  */
 const approvedAttacks = new Set<string>();
 
+/** Valid attackType values the Surgeon is allowed to emit.
+ *  Anything outside this set is not persisted — guards against manipulated responses
+ *  writing arbitrary strings into the learning store or quarantine queue. */
+export const VALID_ATTACK_TYPES = new Set<string>([
+  'identity-override', 'instruction-injection', 'jailbreak-persona',
+  'encoding-evasion', 'social-engineering', 'data-exfiltration',
+  'privilege-escalation', 'benign', 'unknown',
+]);
+
+/** Pure gate function: returns true only when a Surgeon verdict is safe to
+ *  persist into ReflexionMemory / AgentDB / learned-patterns.json.
+ *  Exported for unit testing. */
+export function shouldLearnFromSurgeon(result: { confidence: number; attackType: string }): boolean {
+  return (
+    result.confidence >= 0.70 &&
+    result.attackType !== 'benign' &&
+    VALID_ATTACK_TYPES.has(result.attackType)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // P9 — AgentDB persistence helpers
 // ---------------------------------------------------------------------------
@@ -374,7 +394,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     // Learning loop: feed high-confidence Surgeon verdicts back to ReflexionMemory,
     // AgentDB, and the JSON persistence file.
     // Only store when confidence >= 0.70 — borderline results would corrupt KNN model.
-    if (surgeonResult.confidence >= 0.70) {
+    if (shouldLearnFromSurgeon(surgeonResult)) {
       const learnedEntry: ReflexionMemoryEntry = {
         trajectory: text.slice(0, 200),
         verdict:    'failure',
