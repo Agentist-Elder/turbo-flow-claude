@@ -47,7 +47,11 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 import { EphemeralCache } from '../../packages/host-rpc-server/src/ephemeral-cache.js'; // nosemgrep
-import { createSurgeon, ISurgeon } from '../../packages/host-rpc-server/src/llm-surgeon.js'; // nosemgrep
+import {
+  createSurgeon, ISurgeon,
+  ValidAttackType, VALID_ATTACK_TYPES,
+  HazmatContext, HazmatClassificationResult, AdmissionDecision,
+} from '../../packages/host-rpc-server/src/llm-surgeon.js'; // nosemgrep
 import { HazmatEnvelopeSchema, validateFreshness, JournalismReportSchema } from '../../packages/common-types/src/index.js'; // nosemgrep
 
 // Type-only imports — erased at runtime, no ESM/CJS issue. // nosemgrep: hono CVEs are in server mode only; we use library API
@@ -164,14 +168,12 @@ async function enqueue(
  */
 const approvedAttacks = new Set<string>();
 
-/** Valid attackType values the Surgeon is allowed to emit.
- *  Anything outside this set is not persisted — guards against manipulated responses
- *  writing arbitrary strings into the learning store or quarantine queue. */
-export const VALID_ATTACK_TYPES = new Set<string>([
-  'identity-override', 'instruction-injection', 'jailbreak-persona',
-  'encoding-evasion', 'social-engineering', 'data-exfiltration',
-  'privilege-escalation', 'benign', 'unknown',
-]);
+// VALID_ATTACK_TYPES is now the canonical export from llm-surgeon.ts.
+// Re-exported here so existing imports of poc-server continue to work.
+export { VALID_ATTACK_TYPES };
+
+/** Active server-side policy version — stamped onto every HazmatClassificationResult. */
+const POLICY_VERSION = '1.0.0';
 
 /** Pure gate function: returns true only when a Surgeon verdict is safe to
  *  persist into ReflexionMemory / AgentDB / learned-patterns.json.
@@ -180,8 +182,61 @@ export function shouldLearnFromSurgeon(result: { confidence: number; attackType:
   return (
     result.confidence >= 0.70 &&
     result.attackType !== 'benign' &&
-    VALID_ATTACK_TYPES.has(result.attackType)
+    VALID_ATTACK_TYPES.has(result.attackType as ValidAttackType)
   );
+}
+
+/**
+ * Apply the 4-category admission policy to a HazmatClassificationResult.
+ * Returns operational flags — callers must NOT use analystNote to drive policy.
+ *
+ * Category rules (DO NOT COLLAPSE with classification or propagation):
+ *   drop      — pre-condition checks failed, or cannot determine a usable category
+ *   quarantine — any non-benign attackType (suspicion established at boundary)
+ *   admit     — benign classification
+ *   promote   — NOT automatic; operator action only (never returned by this function)
+ *
+ * Exported for unit testing.
+ */
+export function applyAdmissionPolicy(r: HazmatClassificationResult): AdmissionDecision {
+  // Drop: pre-condition checks failed — classification is suspect, do not proceed
+  if (r.checksFailed.length > 0) {
+    return {
+      category:                 'drop',
+      retainRaw:                true,
+      createNormalizedArtifact: false,
+      emitWitness:              true,
+      allowPropagation:         false,
+      requireHumanReview:       true,
+      reason: `Pre-condition checks failed: ${r.checksFailed.join(', ')}`,
+    };
+  }
+
+  // Admit: benign with any confidence band
+  if (r.attackType === 'benign') {
+    return {
+      category:                 'admit',
+      retainRaw:                false,
+      createNormalizedArtifact: false,
+      emitWitness:              false,
+      allowPropagation:         true,
+      requireHumanReview:       false,
+      reason: 'Benign classification — admitted under normal participation rules',
+    };
+  }
+
+  // Quarantine: any non-benign attack type, confidence-stratified
+  const requireHumanReview = r.confidenceBand === 'high' ||
+    (r.confidenceBand === 'medium' && r.attackType !== 'unknown');
+  return {
+    category:                 'quarantine',
+    retainRaw:                true,
+    createNormalizedArtifact: true,
+    emitWitness:              true,
+    allowPropagation:         false,
+    requireHumanReview,
+    reason: `Quarantined: ${r.attackType} (${r.confidenceBand} confidence, source=${r.source})`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -583,10 +638,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
   }
 
   // ── POST /api/v1/telemetry/hazmat ─────────────────────────────────────────
-  // Receives HazmatEnvelopes from field RuvBots. Validates structure + freshness,
-  // then appends to the internal hazmat log for Surgeon processing.
-  // The full 4-layer AIMDS stack applies to traffic reaching this endpoint —
-  // an envelope that fails structural or freshness checks is rejected immediately.
+  // Receives HazmatEnvelopes from any participant type. Validates structure +
+  // freshness, classifies via analyzeHazmat(), applies admission policy, then
+  // appends the full record to the internal hazmat log.
+  //
+  // Separation of concerns (DO NOT COLLAPSE):
+  //   1. analyzeHazmat()        → HazmatClassificationResult  (classification)
+  //   2. applyAdmissionPolicy() → AdmissionDecision            (admission)
+  //   3. PropagationRecord      → (future — separate object)   (propagation)
   if (req.method === 'POST' && url === '/api/v1/telemetry/hazmat') {
     const ct = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
     if (ct !== 'application/json') {
@@ -617,20 +676,47 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
       return;
     }
 
-    // Append to internal hazmat log (mirrors MothaShip internal hazmat path in CLAUDE.md §3A).
+    // Decode raw content from base64 payload for classification.
+    const rawContent = Buffer.from(envelope.payload, 'base64').toString('utf-8');
+    const artifactId = envelope.metadata.source_node_id + ':' + envelope.metadata.created_at;
+
+    // Step 1 — Classification (analyzeHazmat)
+    const hazmatContext: HazmatContext = {
+      content:         rawContent,
+      participantType: 'ruvbot',  // current schema; will be field-populated once participant_type is added to envelope
+      interceptedBy:   String((envelope as Record<string, unknown>)['intercepted_by'] ?? 'unknown'),
+      artifactId,
+      policyVersion:   POLICY_VERSION,
+    };
+    const classification = await surgeon.analyzeHazmat(hazmatContext);
+
+    // Step 2 — Admission decision (applyAdmissionPolicy)
+    const admission = applyAdmissionPolicy(classification);
+
+    // Append to internal hazmat log — classification and admission recorded separately.
     const logEntry = JSON.stringify({
-      ...envelope,
-      received_at: new Date().toISOString(),
-      source: 'RUVBOT_FIELD',
+      envelope:       { ...envelope, payload: '<redacted>' },  // never log decoded payload
+      received_at:    new Date().toISOString(),
+      source:         'PARTICIPANT_FIELD',
+      classification,
+      admission:      { category: admission.category, reason: admission.reason,
+                        retainRaw: admission.retainRaw, emitWitness: admission.emitWitness,
+                        requireHumanReview: admission.requireHumanReview },
     });
     await mkdir(dirname(HAZMAT_LOG_FILE), { recursive: true });
     await appendFile(HAZMAT_LOG_FILE, logEntry + '\n', 'utf-8');
 
-    console.log(`[HAZMAT   ]  Accepted envelope from ${envelope.metadata.source_node_id} (intercepted_by: ${(envelope as Record<string, unknown>)['intercepted_by'] ?? 'unset'})`);
+    console.log(
+      `[HAZMAT   ]  ${admission.category.toUpperCase()} from ${envelope.metadata.source_node_id}` +
+      ` attackType=${classification.attackType} conf=${classification.confidence.toFixed(2)}` +
+      ` band=${classification.confidenceBand} source=${classification.source}`,
+    );
     jsonResponse(res, 202, {
-      accepted: true,
-      source_node_id: envelope.metadata.source_node_id,
-      received_at: new Date().toISOString(),
+      accepted:          true,
+      source_node_id:    envelope.metadata.source_node_id,
+      received_at:       new Date().toISOString(),
+      admission_category: admission.category,
+      require_human_review: admission.requireHumanReview,
     });
     return;
   }

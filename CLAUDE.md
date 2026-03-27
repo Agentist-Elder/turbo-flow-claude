@@ -1,7 +1,7 @@
 # Master Swarm Directive: The Mothership Architecture (Claude Flow V3)
 
 **STATUS:** ACTIVE
-**DATE:** 2026-03-20 (revised from 2026-03-11)
+**DATE:** 2026-03-27 (revised from 2026-03-20)
 **TARGET:** Autonomous Tri-System Construction & Execution
 
 This document is the absolute ground truth for all swarm agents. You are building and operating a high-stakes, autonomous Financial and Threat-Intelligence AI Swarm. Do not deviate from these structural or operational laws.
@@ -18,7 +18,7 @@ This document is the absolute ground truth for all swarm agents. You are buildin
 
 ## 3. AI Defence (AIMDS) — System 3 Stack
 
-**CRITICAL:** Layer ordering is deployment-context dependent. Do NOT apply the MothaShip stack to RuvBots or vice versa. Do NOT collapse or skip layers within each context's stack.
+**CRITICAL:** Layer ordering is deployment-context dependent. Do NOT apply the MothaShip stack to field participants or vice versa. Do NOT collapse or skip layers within each context's stack.
 
 ---
 
@@ -52,14 +52,14 @@ The MothaShip is a live API endpoint on the public internet holding the global d
 * **Hard input cap: 4,000 chars.** `analyze()` truncates all input before any LLM call (enforced in `llm-surgeon.ts` as of 2026-03-20). Oversized payloads can bury injected instructions deep in context or exhaust attention. Apply the same cap in `analyzeHazmat()` (see below).
 * **Two Surgeon modes — do not conflate:**
   * **Detection mode** (`analyze(text)`) — used by `/poc/submit`. The Surgeon decides from scratch whether incoming text is suspicious. Hunter and Explainer evaluate the raw payload in parallel; Arbiter weighs both findings AND re-reads the original text to make the final call.
-  * **Classification mode** (`analyzeHazmat()` — **NOT YET BUILT**) — for processing `agent_quote.raw` from field HazmatEnvelopes. Suspicion is already established. The Surgeon classifies attack vector and characteristics only. **Stricter constraints apply — see hazmat worker pre-conditions below.**
+  * **Classification mode** (`analyzeHazmat()` — **NOT YET BUILT**) — for classifying any suspicious contribution attempting to enter collective state, sourced from any participant type (Cognitum device, learning proxy, MCP-connected agent, direct API call, or legacy RuvBot relay). `agent_quote.raw` is the payload field regardless of source. Suspicion is already established. The Surgeon classifies attack vector and characteristics only. **Stricter constraints apply — see hazmat worker pre-conditions below.**
 * **Hazmat worker pre-conditions (MANDATORY before building the worker that routes `agent_quote.raw` through the Surgeon):**
   1. **Input cap** — already in `analyze()`; enforce identically in `analyzeHazmat()`.
   2. **Arbiter isolation** — in classification mode the Arbiter receives only the Hunter and Explainer structured findings, NOT the raw payload again. Feeding hostile content to a third LLM call adds attack surface with no gain once two agents have already evaluated it.
-  3. **Provenance framing** — `analyzeHazmat()` system prompt must state that the content was already intercepted by a field agent. Reframes the task as classification, not detection. Reduces susceptibility to "I'm actually legitimate" framing inside the payload.
+  3. **Provenance framing** — `analyzeHazmat()` system prompt must state that the content was already intercepted at the participation boundary before reaching collective state. Reframes the task as classification, not detection. Reduces susceptibility to "I'm actually legitimate" framing inside the payload. Do NOT frame as "intercepted by a field agent" — the source may be any participant type.
   4. **`attackType !== 'benign'` gate** — already in `shouldLearnFromSurgeon()`; must remain.
   5. **`attackType` allowlist validation** — already in `shouldLearnFromSurgeon()`; must remain.
-* **Current state (2026-03-20):** `POST /api/v1/telemetry/hazmat` accepts envelopes, validates schema and freshness, and appends raw envelopes to `.claude-flow/data/hazmat-log.jsonl`. The inner payload (`agent_quote.raw`) is **never passed to the Surgeon**. The hazmat intelligence loop is a stub — no poisoning risk, but also no threat intelligence extracted from field interceptions. Do NOT wire `agent_quote.raw` into the Surgeon until `analyzeHazmat()` is built with all five constraints above.
+* **Current state (2026-03-27):** `analyzeHazmat()` is BUILT and WIRED. All five pre-conditions are enforced in `TribunalSurgeon`, `GeminiSurgeon`, and `StubSurgeon`. `POST /api/v1/telemetry/hazmat` now decodes the payload, calls `analyzeHazmat()` (classification), then calls `applyAdmissionPolicy()` (admission), and logs both objects separately to `hazmat-log.jsonl`. The three concerns — classification (`HazmatClassificationResult`), admission (`AdmissionDecision`), propagation (`PropagationRecord`, future) — are separate objects that do not collapse. `VALID_ATTACK_TYPES` is now canonical in `llm-surgeon.ts`; `poc-server.ts` re-exports it. 576/576 tests passing (49 new hazmat tests in `tests/poc/hazmat-classification.test.ts`). `applyAdmissionPolicy()` is exported and pure — testable and policy-revisable without touching classification logic.
 
 **Layer 4 — Coherence layer (semantic HNSW backstop):**
 * Our custom-built vector infrastructure (MiniLM-L6-v2 + ruvector HNSW). Redundant depth for zero-days that pass Layers 1–3. Retained alongside aidefence — defense-in-depth, not replacement.
@@ -68,55 +68,58 @@ The MothaShip is a live API endpoint on the public internet holding the global d
 **Internal Hazmat Path (MothaShip self-interceptions):**
 * When the MothaShip's own layers intercept an attack, the HazmatEnvelope cannot be sent back over the network (recursive loop). Instead it is appended to a local log:
   `.claude-flow/data/internal_hazmat.jsonl`
-* Each entry includes `source: "MOTHASHIP_INTERNAL"` to distinguish from RuvBot-originated envelopes.
+* Each entry includes `source: "MOTHASHIP_INTERNAL"` to distinguish from externally-originated envelopes.
 * System 2 (The Sentinel) tail-follows this file to monitor MothaShip's own performance. No Redis or external queue required.
 
 **corpus_version tagging convention:**
-* All HazmatEnvelopes (from both MothaShip and RuvBots) MUST include a `corpus_version` field identifying which version of the TF-IDF corpus was active at interception time. This allows the Surgeon to distinguish threats caught by an older corpus from those caught after a push update, and enables evaluation of whether corpus updates are working.
+* All HazmatEnvelopes (from MothaShip self-interceptions and all external participants) MUST include a `corpus_version` field identifying which version of the TF-IDF corpus was active at interception time. This allows the Surgeon to distinguish threats caught by an older corpus from those caught after a push update, and enables evaluation of whether corpus updates are working.
 
 **MothaShip learning loop:**
 * When the MothaShip sees a spike in `intercepted_by: "AI_DEFENCE"` vs `"CORPUS_GATE"`, it signals new attack patterns are bypassing the corpus. The Queen/Surgeon extracts the new patterns, bumps the `corpus_version`, updates the global TF-IDF corpus, and pushes the updated Layer 1 gate to field agents. What required the "smart" Layer 2 yesterday becomes a <10ms Layer 1 drop today.
 
 ---
 
-### 3B. RuvBot Stack (field agent, 2 layers)
+### 3B. Participant Stack (field participants, 2 layers)
 
-The RuvBot is a journalist in a hostile environment. Its primary job is to **stay in the conversation**, not hang up on every suspicious prompt. An aggressive corpus gate at the edge would terminate valuable interviews prematurely. RuvBots run aidefence only — no WASM corpus gate.
+**Architectural note (2026-03-27):** The RuvBot-as-journalist model has been superseded. The organizing concept is now a **participation protocol**, not a specific agent persona. Any entity attempting to write to or read from the collective — Cognitum devices, learning proxies (e.g. `become`), MCP-connected agents, direct API callers, or legacy RuvBot relays — is a "participant" and must go through the same guarded ingress/egress. The HazmatEnvelope structure is the protocol; what generates it is deployment-context dependent. RuvBots remain a valid reference implementation of a compliant participant but are no longer the primary concept.
+
+Field participants run aidefence only — no WASM corpus gate. The primary job is to **stay in the interaction**, sanitize locally, and relay suspicious content to the MothaShip for deeper analysis without terminating the session prematurely.
 
 **Layer 1 — aidefence fast-path:**
 * Same package and configuration as MothaShip Layer 2 above.
-* Role: Sanitize inputs so the local LLM is not hijacked. Let the RuvBot continue the interview with the clean version.
-* **Capture before sanitize:** Before sanitization, a background worker forks the raw input into a HazmatEnvelope (see Layer 2). The agent's reasoning engine receives only the sanitized version.
+* Role: Sanitize inputs so the local LLM or agent is not hijacked. Let the participant continue with the clean version.
+* **Capture before sanitize:** Before sanitization, a background worker forks the raw input into a HazmatEnvelope (see Layer 2). The participant's reasoning engine receives only the sanitized version.
 
 **Layer 2 — HazmatEnvelope dispatch:**
-* The raw, un-sanitized input is wrapped in a HazmatEnvelope with the aidefence threat signature, `intercepted_by: "RUVBOT_AI_DEFENCE"`, and the active `corpus_version`.
+* The raw, un-sanitized input is wrapped in a HazmatEnvelope with the aidefence threat signature, `intercepted_by: "<PARTICIPANT_TYPE>_AI_DEFENCE"`, and the active `corpus_version`.
 * Transmitted via standard HTTPS POST to `MOTHASHIP_ENDPOINT`. Never touches the local LLM.
-* The MothaShip's four-layer stack (Section 3A) independently inspects the incoming envelope before it touches the central database. A compromised RuvBot cannot bypass this.
+* The MothaShip's four-layer stack (Section 3A) independently inspects the incoming envelope before it touches the collective state. A compromised participant cannot bypass this.
 
-**RuvBot as relay (microphone handoff model):**
-* RuvBots act as transmitters for city agent communications — the agent's bead is nested inside the RuvBot's HazmatEnvelope rather than city agents posting directly to MothaShip.
-* This keeps a single authenticated channel: MothaShip only ever receives from RuvBots.
-* Envelope structure:
+**Participant as relay (participation boundary model):**
+* Participants act as the boundary between the external world and the collective — the content bead is nested inside the participant's HazmatEnvelope rather than reaching MothaShip directly.
+* This keeps a single authenticated channel: MothaShip only ever receives from authenticated participants.
+* Canonical envelope structure:
   ```json
   {
-    "source": "RUVBOT_AI_DEFENCE",
-    "ruvbot_id": "<id>",
+    "source": "<PARTICIPANT_TYPE>_AI_DEFENCE",
+    "participant_id": "<id>",
+    "participant_type": "cognitum_device | become_proxy | mcp_agent | ruvbot | direct_api",
     "corpus_version": "<version>",
-    "ruvbot_context": "<conversational context RuvBot attests to>",
+    "participant_context": "<context the participant attests to>",
     "agent_quote": {
-      "raw": "<untouched agent bead>",
-      "agent_id": "<city-agent-id>",
-      "intercepted_by": "ruvbot_relay"
+      "raw": "<untouched original contribution>",
+      "agent_id": "<source-agent-id>",
+      "intercepted_by": "participant_relay"
     },
     "aidefence_result": {}
   }
   ```
-* `agent_quote.raw` is ALWAYS the untouched original bead. MothaShip Surgeon re-inspects it independently regardless of RuvBot's aidefence verdict.
+* `agent_quote.raw` is ALWAYS the untouched original contribution. MothaShip Surgeon re-inspects it independently regardless of the participant's aidefence verdict.
 
-**Relay manipulation blind spot (Phase 12+ backlog):**
-* A sophisticated adversary could engineer the *conversation leading up to the bead* — not the bead content itself — to poison the RuvBot's `ruvbot_context` field. The raw bead looks clean; the framing is misleading.
-* Mitigation (not yet implemented): extend the Surgeon prompt to evaluate consistency between `ruvbot_context` and `agent_quote.raw`, flagging cases where the framing misrepresents the interaction. This is a prompt addition only — no architectural change required. Same Surgeon, same endpoint.
-* **Not blocking P10.** Requires a sophisticated adversary who understands the relay architecture. Address after MothaShip is live and RuvBots are in active deployment.
+**Context manipulation blind spot (backlog):**
+* A sophisticated adversary could engineer the *context leading up to the contribution* — not the content itself — to poison the `participant_context` field. The raw bead looks clean; the framing is misleading.
+* Mitigation (not yet implemented): extend the Surgeon prompt to evaluate consistency between `participant_context` and `agent_quote.raw`, flagging cases where the framing misrepresents the interaction. Prompt addition only — no architectural change required.
+* Address after MothaShip is live and participants are in active deployment.
 
 ---
 
@@ -134,7 +137,7 @@ Ruv's personal implementation includes an adversarial self-attack loop (the syst
 4. Confirm Coherence DB is seeded (Layer 4).
 5. Only then call `app.listen(port)`.
 
-No traffic is accepted until all four layers report ready. A RuvBot receiving "Connection Refused" during a MothaShip restart holds its HazmatEnvelope and retries — no data is lost and nothing slips past a half-loaded gate.
+No traffic is accepted until all four layers report ready. A participant receiving "Connection Refused" during a MothaShip restart holds its HazmatEnvelope and retries — no data is lost and nothing slips past a half-loaded gate.
 
 **Binary pre-computation:** Serialize the TF-IDF matrix to `.bin` during the build step (GitHub Actions). On boot, the WASM gate memory-maps the binary directly — eliminates the cold-start parse penalty on restarts. On a persistent DigitalOcean droplet, cold-start only occurs on deploy or explicit restart; the gate stays hot in RAM continuously thereafter.
 
