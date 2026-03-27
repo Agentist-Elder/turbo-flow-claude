@@ -285,12 +285,20 @@ describe('StubSurgeon.analyzeHazmat — output contract', () => {
     expect(r.rawSeenBy).not.toContain('arbiter');
   });
 
-  it('checksApplied contains all 5 HAZMAT_CHECKS values', async () => {
+  it('checksApplied contains the 4 checks applicable to the heuristic path', async () => {
+    // ARBITER_ISOLATED is intentionally omitted from StubSurgeon — there is no Arbiter
+    // to isolate on a heuristic path. Only TribunalSurgeon can honestly attest this check.
     const r = await stub.analyzeHazmat(makeContext());
-    const expected = Object.values(HAZMAT_CHECKS);
-    for (const check of expected) {
-      expect(r.checksApplied).toContain(check);
-    }
+    expect(r.checksApplied).toContain(HAZMAT_CHECKS.INPUT_CAPPED);
+    expect(r.checksApplied).toContain(HAZMAT_CHECKS.PROVENANCE_FRAMED);
+    expect(r.checksApplied).toContain(HAZMAT_CHECKS.ALLOWLIST_VALIDATED);
+    expect(r.checksApplied).toContain(HAZMAT_CHECKS.BENIGN_GATED);
+    expect(r.checksApplied).not.toContain(HAZMAT_CHECKS.ARBITER_ISOLATED);
+  });
+
+  it('rawSeenBy is empty for heuristic path — no named sub-agents', async () => {
+    const r = await stub.analyzeHazmat(makeContext());
+    expect(r.rawSeenBy).toHaveLength(0);
   });
 
   it('artifactId echoes context.artifactId', async () => {

@@ -683,7 +683,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     // Step 1 — Classification (analyzeHazmat)
     const hazmatContext: HazmatContext = {
       content:         rawContent,
-      participantType: 'ruvbot',  // current schema; will be field-populated once participant_type is added to envelope
+      // participant_type is not yet in HazmatEnvelopeSchema — read if present (future senders),
+      // fall back to 'unknown' rather than hardcoding 'ruvbot' (which corrupts audit logs
+      // for cognitum_device / mcp_agent / become_proxy callers).
+      participantType: String((envelope as Record<string, unknown>)['participant_type'] ?? 'unknown'),
       interceptedBy:   String((envelope as Record<string, unknown>)['intercepted_by'] ?? 'unknown'),
       artifactId,
       policyVersion:   POLICY_VERSION,

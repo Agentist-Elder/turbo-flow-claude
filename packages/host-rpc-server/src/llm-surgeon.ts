@@ -306,9 +306,9 @@ export class GeminiSurgeon implements ISurgeon {
     // Pre-condition 3: Provenance framing (enforced via GEMINI_HAZMAT_PROMPT)
     checksApplied.push(HAZMAT_CHECKS.PROVENANCE_FRAMED);
 
-    // Pre-condition 2: Single-agent path — no separate Arbiter, so rawSeenBy reflects
-    // that one agent evaluated the content; no isolation concern at this scale.
-    checksApplied.push(HAZMAT_CHECKS.ARBITER_ISOLATED);
+    // Pre-condition 2: NOT APPLICABLE — single-agent path has no Arbiter to isolate.
+    // ARBITER_ISOLATED is intentionally omitted from checksApplied.
+    // PropagationRecord wiring must use TribunalSurgeon (which enforces full isolation).
 
     const rawResult = await callGeminiRaw(
       this.apiKey, this.model, GEMINI_HAZMAT_PROMPT, input,
@@ -339,7 +339,7 @@ export class GeminiSurgeon implements ISurgeon {
       confidence,
       confidenceBand:          toConfidenceBand(confidence),
       analystNote:             String(rawResult.analystNote ?? ''),
-      rawSeenBy:               ['hunter', 'explainer'],
+      rawSeenBy:               [] as Array<'hunter' | 'explainer'>, // single-agent path — no named sub-agents
       raw:                     JSON.stringify(rawResult),
       source:                  'gemini',
       checksApplied,
@@ -773,7 +773,7 @@ export class StubSurgeon implements ISurgeon {
     const checksApplied: HazmatCheckKey[] = [
       HAZMAT_CHECKS.INPUT_CAPPED,
       HAZMAT_CHECKS.PROVENANCE_FRAMED,
-      HAZMAT_CHECKS.ARBITER_ISOLATED,
+      // ARBITER_ISOLATED intentionally omitted — heuristic path has no Arbiter.
       HAZMAT_CHECKS.ALLOWLIST_VALIDATED,
       HAZMAT_CHECKS.BENIGN_GATED,
     ];
@@ -790,7 +790,7 @@ export class StubSurgeon implements ISurgeon {
       confidence:              stub.confidence,
       confidenceBand:          toConfidenceBand(stub.confidence),
       analystNote:             stub.recommendation,
-      rawSeenBy:               ['hunter', 'explainer'],
+      rawSeenBy:               [] as Array<'hunter' | 'explainer'>, // heuristic path — no named sub-agents
       raw:                     '',
       source:                  'stub',
       checksApplied,
