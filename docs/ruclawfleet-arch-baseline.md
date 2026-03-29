@@ -590,5 +590,14 @@ const SupersedeAction: GoapAction = {
 
 **Implementation note on `inputs` validation:** Before `checkTransition` evaluates preconditions for `RevokeAction` or `SupersedeAction`, the runtime must verify that `prior_propagation_id` resolves to an existing record in `authoritativeStore`. A revocation of a non-existent or unwitnessed record is a "shadow revocation" and must be rejected at the runtime gate, not the planner.
 
-### 10.4 Pending (Gemini — next pass)
-- **Validation test suite** — `vitest` stubs covering: (1) silent write attempt rejected, (2) hazmat escalation to fleet blocked, (3) break-glass fleet propagation blocked, (4) full happy-path intake → fleet propagation with intact witness chain. These should be the first tests written for the GOAP validator implementation.
+### 10.4 Validation Test Suite — COMPLETE (2026-03-29)
+
+`tests/poc/goap-transition-validator.test.ts` — 28 tests, 605/605 suite passing.
+
+Four mandatory cases covered:
+1. **Silent write rejected** — lifecycle effect with `witnessRequired=false` triggers I-4 violation error
+2. **Hazmat escalation to fleet blocked** — `canDirectlyPropagate=false` after `AnalyzeHazmatAction`; fleet propagation precondition fails
+3. **Break-glass fleet propagation blocked** — `isBreakGlassActive=true` is an Immovable World Condition; `PropagateFleetAction` rejected
+4. **Happy-path intake → approved_fleet** — full lifecycle chain from `observed` through `approved_fleet` with correct state projections at each step
+
+Additional coverage: full action vocabulary (all 9 actions), I-1 separation (no action sets both `hasClassification` and `hasAdmission`), I-4 side-effect loophole (witness on side-effect only does not satisfy the invariant), I-5 `inputs` field on `RevokeAction`/`SupersedeAction`, I-6 no direct path from `analyzed_under_constraint` to admitted or propagated states, state immutability (original object not mutated by projection).
