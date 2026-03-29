@@ -18,188 +18,20 @@
  */
 
 import { describe, it, expect } from 'vitest';
-
-// ---------------------------------------------------------------------------
-// Types (mirrors docs/ruclawfleet-arch-baseline.md §10.1)
-// ---------------------------------------------------------------------------
-
-type Lifecycle =
-  | 'observed'
-  | 'normalized'
-  | 'classified'
-  | 'quarantined'
-  | 'analyzed_under_constraint'
-  | 'admitted_local'
-  | 'approved_limited'
-  | 'approved_fleet'
-  | 'revoked'
-  | 'superseded';
-
-interface RuClawWorldState {
-  lifecycle: Lifecycle;
-  isBreakGlassActive: boolean;
-  isAuthorizedPropagator: boolean;
-  hasClassification: boolean;
-  hasAdmission: boolean;
-  isHazmat: boolean;
-  isLocalOnly: boolean;
-  canDirectlyPropagate: boolean;
-  lastWitnessId: string | null;
-}
-
-interface GoapEffect {
-  predicate: keyof RuClawWorldState;
-  value: RuClawWorldState[keyof RuClawWorldState];
-  witnessRequired: boolean;
-}
-
-interface GoapAction {
-  name: string;
-  preconditions: Partial<RuClawWorldState>;
-  effects: GoapEffect[];
-  inputs?: string[];
-}
-
-// ---------------------------------------------------------------------------
-// checkTransition (mirrors docs/ruclawfleet-arch-baseline.md §10.1)
-// ---------------------------------------------------------------------------
-
-function checkTransition(
-  currentState: RuClawWorldState,
-  proposedAction: GoapAction,
-): { valid: boolean; resultingState: RuClawWorldState | null; error?: string } {
-  // 1. Check preconditions
-  for (const [key, value] of Object.entries(proposedAction.preconditions)) {
-    if (currentState[key as keyof RuClawWorldState] !== value) {
-      return {
-        valid: false,
-        resultingState: null,
-        error: `Precondition fail: ${key} expected ${value}, got ${currentState[key as keyof RuClawWorldState]}`,
-      };
-    }
-  }
-
-  // 2. I-4: the lifecycle-changing effect must have witnessRequired=true
-  //    A side-effect witness does NOT satisfy the invariant.
-  const lifecycleEffect = proposedAction.effects.find(e => e.predicate === 'lifecycle');
-  if (lifecycleEffect && !lifecycleEffect.witnessRequired) {
-    return {
-      valid: false,
-      resultingState: null,
-      error: 'Invariant I-4 violation: lifecycle transition effect must have witnessRequired=true',
-    };
-  }
-
-  // 3. Project resulting state
-  const nextState = { ...currentState };
-  for (const effect of proposedAction.effects) {
-    (nextState as any)[effect.predicate] = effect.value;
-  }
-
-  return { valid: true, resultingState: nextState };
-}
-
-// ---------------------------------------------------------------------------
-// Action vocabulary (mirrors docs/ruclawfleet-arch-baseline.md §10.2–10.3)
-// ---------------------------------------------------------------------------
-
-const NormalizeAction: GoapAction = {
-  name: 'NormalizeArtifact',
-  preconditions: { lifecycle: 'observed' },
-  effects: [
-    { predicate: 'lifecycle', value: 'normalized', witnessRequired: true },
-    { predicate: 'isLocalOnly', value: true, witnessRequired: false },
-  ],
-};
-
-const ClassifyAction: GoapAction = {
-  name: 'ClassifyArtifact',
-  preconditions: { lifecycle: 'normalized', hasClassification: false },
-  effects: [
-    { predicate: 'lifecycle', value: 'classified', witnessRequired: true },
-    { predicate: 'hasClassification', value: true, witnessRequired: false },
-  ],
-};
-
-const AdmitLocalAction: GoapAction = {
-  name: 'AdmitLocal',
-  preconditions: { lifecycle: 'classified', hasAdmission: false, isHazmat: false },
-  effects: [
-    { predicate: 'lifecycle', value: 'admitted_local', witnessRequired: true },
-    { predicate: 'hasAdmission', value: true, witnessRequired: false },
-    { predicate: 'canDirectlyPropagate', value: true, witnessRequired: false },
-  ],
-};
-
-const AdmitHazmatToQuarantineAction: GoapAction = {
-  name: 'AdmitHazmatToQuarantine',
-  preconditions: { lifecycle: 'classified', hasAdmission: false, isHazmat: true },
-  effects: [
-    { predicate: 'lifecycle', value: 'quarantined', witnessRequired: true },
-    { predicate: 'hasAdmission', value: true, witnessRequired: false },
-    { predicate: 'canDirectlyPropagate', value: false, witnessRequired: false },
-  ],
-};
-
-const AnalyzeHazmatAction: GoapAction = {
-  name: 'AnalyzeHazmat',
-  preconditions: { lifecycle: 'quarantined', isHazmat: true },
-  effects: [
-    { predicate: 'lifecycle', value: 'analyzed_under_constraint', witnessRequired: true },
-    { predicate: 'canDirectlyPropagate', value: false, witnessRequired: false },
-    { predicate: 'isLocalOnly', value: true, witnessRequired: false },
-  ],
-};
-
-const PropagateLimitedAction: GoapAction = {
-  name: 'PropagateLimitedScope',
-  preconditions: {
-    lifecycle: 'admitted_local',
-    canDirectlyPropagate: true,
-    isBreakGlassActive: false,
-  },
-  effects: [
-    { predicate: 'lifecycle', value: 'approved_limited', witnessRequired: true },
-  ],
-};
-
-const PropagateFleetAction: GoapAction = {
-  name: 'PropagateToWholeFleet',
-  preconditions: {
-    lifecycle: 'admitted_local',
-    canDirectlyPropagate: true,
-    isBreakGlassActive: false,
-    isAuthorizedPropagator: true,
-  },
-  effects: [
-    { predicate: 'lifecycle', value: 'approved_fleet', witnessRequired: true },
-    { predicate: 'isLocalOnly', value: false, witnessRequired: false },
-  ],
-};
-
-const RevokeAction: GoapAction = {
-  name: 'RevokePropagation',
-  inputs: ['prior_propagation_id'],
-  preconditions: {
-    isAuthorizedPropagator: true,
-    isBreakGlassActive: false,
-  },
-  effects: [
-    { predicate: 'lifecycle', value: 'revoked', witnessRequired: true },
-  ],
-};
-
-const SupersedeAction: GoapAction = {
-  name: 'SupersedeDecision',
-  inputs: ['prior_propagation_id'],
-  preconditions: {
-    isAuthorizedPropagator: true,
-    isBreakGlassActive: false,
-  },
-  effects: [
-    { predicate: 'lifecycle', value: 'superseded', witnessRequired: true },
-  ],
-};
+import {
+  checkTransition,
+  NormalizeAction,
+  ClassifyAction,
+  AdmitLocalAction,
+  AdmitHazmatToQuarantineAction,
+  AnalyzeHazmatAction,
+  PropagateLimitedAction,
+  PropagateFleetAction,
+  RevokeAction,
+  SupersedeAction,
+  type RuClawWorldState,
+  type GoapAction,
+} from '../../packages/host-rpc-server/src/goap-transition-validator.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

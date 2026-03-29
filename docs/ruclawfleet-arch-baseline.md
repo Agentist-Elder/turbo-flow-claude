@@ -239,7 +239,7 @@ observed
 
 ## 6. Ru Pi → RuCLAW Inflection-Signal Interface
 
-**This interface is currently undefined. The following is a proposed minimal contract subject to review before implementation.**
+**CONTRACT LOCKED 2026-03-29.** Canonical TypeScript types in `packages/host-rpc-server/src/ruclawfleet-types.ts`. Implementation pending (no Pi integration yet). The following is the locked minimal contract.
 
 The adaptive layer (Ru Pi) may detect accumulation, trajectory, and context-sensitivity that point toward an approaching inflection. It signals RuCLAW via an InflectionSignal. RuCLAW then makes its own policy decision — the signal is a proposal, not an authorization.
 
@@ -601,3 +601,39 @@ Four mandatory cases covered:
 4. **Happy-path intake → approved_fleet** — full lifecycle chain from `observed` through `approved_fleet` with correct state projections at each step
 
 Additional coverage: full action vocabulary (all 9 actions), I-1 separation (no action sets both `hasClassification` and `hasAdmission`), I-4 side-effect loophole (witness on side-effect only does not satisfy the invariant), I-5 `inputs` field on `RevokeAction`/`SupersedeAction`, I-6 no direct path from `analyzed_under_constraint` to admitted or propagated states, state immutability (original object not mutated by projection).
+
+---
+
+## 11. Implementation Status (2026-03-29)
+
+### What exists in code
+
+| Component | File | Status |
+|-----------|------|--------|
+| Record type definitions (Sections 4 + 6) | `packages/host-rpc-server/src/ruclawfleet-types.ts` | COMPLETE |
+| GOAP validator kernel + action vocabulary | `packages/host-rpc-server/src/goap-transition-validator.ts` | COMPLETE |
+| Minimal end-to-end pipeline (intake → propagation gate) | `packages/host-rpc-server/src/ruclawfleet-pipeline.ts` | COMPLETE |
+| Hazmat classification (Section 3A Layer 3) | `packages/host-rpc-server/src/llm-surgeon.ts` | COMPLETE |
+| Admission policy | `scripts/poc/poc-server.ts` (`applyAdmissionPolicy`) | COMPLETE |
+| GOAP validator tests | `tests/poc/goap-transition-validator.test.ts` | 28 tests |
+| Pipeline end-to-end tests | `tests/poc/ruclawfleet-pipeline.test.ts` | 20 tests |
+
+**Test count: 625/625 passing.**
+
+### Naming notes for implementors
+
+Two types in `llm-surgeon.ts` share names with baseline concepts but differ in scope:
+
+- `AdmissionDecision` (llm-surgeon.ts) — full policy-result interface (`allowPropagation`, `requireHumanReview`, etc.). This is what `applyAdmissionPolicy()` returns.
+- `AdmissionOutcome` (ruclawfleet-types.ts) — the string union `'admit_local' | 'quarantine' | 'reject'` used as the `decision` field inside `AdmissionRecord`. Named differently to avoid collision.
+- `ParticipantType` (llm-surgeon.ts) — envelope-origin taxonomy (`cognitum_device`, `ruvbot`, …).
+- `RuClawRoleType` (ruclawfleet-types.ts) — governance-level role taxonomy (`human`, `internal_agent`, …). Named differently to avoid collision.
+
+### What is deferred
+
+- **WitnessRecord signing** — `state_hash` is SHA-256 of record JSON. Ed25519 signing and chain-monotonicity verification (as in Cognitum Seed guide) is the next hardening step.
+- **authoritativeStore** — pipeline returns records; persistence is caller responsibility. No store implementation yet.
+- **`inputs[]` runtime verification** — `checkTransition()` documents the requirement; the runtime that calls it must verify `prior_propagation_id` exists in `authoritativeStore` before executing `RevokeAction`/`SupersedeAction`.
+- **Pi integration** — `InflectionSignal` / `SignalAcknowledgedReceipt` types are locked; no Pi adapter exists yet.
+- **Break-glass quorum path** — type infrastructure exists; quorum mechanism not implemented.
+- **Substrate adapter** — no adapter for any specific collective substrate (OpenClawCity or otherwise) yet.
