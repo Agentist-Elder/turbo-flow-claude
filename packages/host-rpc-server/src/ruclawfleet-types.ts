@@ -209,6 +209,23 @@ export interface PropagationRecord {
   expires_at?: string;
   supersedes?: string;              // FK → prior PropagationRecord being replaced
   witness_id: string;               // FK → WitnessRecord for this decision
+  /**
+   * Optional Ru Pi analysis metadata.
+   * Populated by the Ru Pi coherence layer when analyzeContribution() runs.
+   * Pi may NOT set any field on PropagationRecord directly — only the pipeline
+   * may attach this metadata after consuming a RuPiSignal (ruclawfleet-types §6).
+   * All fields optional to preserve backward compatibility.
+   */
+  metadata?: {
+    /** Routing/store index used at propagation time. */
+    index: string;
+    /** Namespace the contribution is targeting (e.g. 'policy', 'memory'). */
+    namespace: string;
+    /** Ru Pi classified contribution intent — informational, not a policy gate. */
+    intentClass?: import('./ru-pi-coherence.js').ContributionIntent;
+    /** Ru Pi sheaf cohomology energy score — informational, not a policy gate. */
+    energyScore?: number;
+  };
 }
 
 // ---------------------------------------------------------------------------

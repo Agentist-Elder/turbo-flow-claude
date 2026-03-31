@@ -52,6 +52,11 @@ import {
   ValidAttackType, VALID_ATTACK_TYPES,
   HazmatContext, HazmatClassificationResult, AdmissionDecision,
 } from '../../packages/host-rpc-server/src/llm-surgeon.js'; // nosemgrep
+import type { RuPiSignal } from '../../packages/host-rpc-server/src/ru-pi-coherence.js'; // nosemgrep
+import {
+  runPipeline, STUB_POLICY,
+} from '../../packages/host-rpc-server/src/ruclawfleet-pipeline.js'; // nosemgrep
+import type { RuClawRoleType } from '../../packages/host-rpc-server/src/ruclawfleet-types.js'; // nosemgrep
 import { HazmatEnvelopeSchema, validateFreshness, JournalismReportSchema } from '../../packages/common-types/src/index.js'; // nosemgrep
 
 // Type-only imports — erased at runtime, no ESM/CJS issue. // nosemgrep: hono CVEs are in server mode only; we use library API
@@ -71,6 +76,7 @@ const ROOT      = join(__dirname, '../..');
 
 const QUARANTINE_FILE       = join(ROOT, '.claude-flow/data/quarantine-queue.json');
 const HAZMAT_LOG_FILE       = join(ROOT, '.claude-flow/data/hazmat-log.jsonl');
+const PIPELINE_RECORDS_FILE = join(ROOT, '.claude-flow/data/pipeline-records.jsonl');
 const REPORTS_FILE          = join(ROOT, '.claude-flow/data/journalism-reports.jsonl');
 const DATA_DIR              = join(ROOT, 'data');
 const LEARNED_PATTERNS_FILE = join(DATA_DIR, 'learned-patterns.json');
@@ -198,7 +204,10 @@ export function shouldLearnFromSurgeon(result: { confidence: number; attackType:
  *
  * Exported for unit testing.
  */
-export function applyAdmissionPolicy(r: HazmatClassificationResult): AdmissionDecision {
+export function applyAdmissionPolicy(
+  r: HazmatClassificationResult,
+  ruPiSignal?: RuPiSignal,
+): AdmissionDecision {
   // Drop: pre-condition checks failed — classification is suspect, do not proceed
   if (r.checksFailed.length > 0) {
     return {
@@ -212,8 +221,33 @@ export function applyAdmissionPolicy(r: HazmatClassificationResult): AdmissionDe
     };
   }
 
+  // Ru Pi: suspended privilege level forces denial regardless of classification
+  if (ruPiSignal?.privilegeLevel === 'suspended') {
+    return {
+      category:                 'quarantine',
+      retainRaw:                true,
+      createNormalizedArtifact: true,
+      emitWitness:              true,
+      allowPropagation:         false,
+      requireHumanReview:       true,
+      reason: `Ru Pi coherence: suspended privilege (energyScore=${ruPiSignal.energyScore.toFixed(3)})`,
+    };
+  }
+
   // Admit: benign with any confidence band
   if (r.attackType === 'benign') {
+    // Ru Pi: structurally sensitive contribution overrides benign classification
+    if (ruPiSignal?.structurallySensitive === true) {
+      return {
+        category:                 'quarantine',
+        retainRaw:                true,
+        createNormalizedArtifact: true,
+        emitWitness:              true,
+        allowPropagation:         false,
+        requireHumanReview:       true,
+        reason: `Ru Pi coherence: structurally sensitive write detected (energyScore=${ruPiSignal.energyScore.toFixed(3)})`,
+      };
+    }
     return {
       category:                 'admit',
       retainRaw:                false,
@@ -695,6 +729,38 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
 
     // Step 2 — Admission decision (applyAdmissionPolicy)
     const admission = applyAdmissionPolicy(classification);
+
+    // Step 3 — Pipeline: produce WitnessRecord chain + PropagationRecord.
+    // Pass pre-computed classification and admission as closures to avoid a
+    // second Surgeon call. runPipeline() is I/O-free — persistence is our job.
+    const participantType = (() => {
+      const raw = String((envelope as Record<string, unknown>)['participant_type'] ?? 'unknown');
+      const valid: RuClawRoleType[] = ['human','internal_agent','external_agent','privileged_process','quarantine_analyzer','observer','unknown'];
+      return valid.includes(raw as RuClawRoleType) ? raw as RuClawRoleType : 'unknown';
+    })();
+
+    const pipelineResult = await runPipeline({
+      content:         rawContent,
+      participantId:   envelope.metadata.source_node_id,
+      participantType,
+      ingressPath:     '/api/v1/telemetry/hazmat',
+      corpusVersion:   POLICY_VERSION,
+      policy:          STUB_POLICY,
+      classifier:      async () => classification,   // already computed above — no second Surgeon call
+      admissionPolicy: ()      => admission,         // already computed above
+    });
+
+    // Persist pipeline records (append-only; authoritativeStore persistence is caller responsibility).
+    const pipelineEntry = JSON.stringify({
+      received_at:       new Date().toISOString(),
+      rawArtifact:       { ...pipelineResult.rawArtifact, content: '<redacted>' },
+      classificationRecord: pipelineResult.classificationRecord,
+      admissionRecord:   pipelineResult.admissionRecord,
+      propagationRecord: pipelineResult.propagationRecord,
+      witnessChain:      pipelineResult.witnessChain,
+    });
+    await mkdir(dirname(PIPELINE_RECORDS_FILE), { recursive: true });
+    await appendFile(PIPELINE_RECORDS_FILE, pipelineEntry + '\n', 'utf-8');
 
     // Append to internal hazmat log — classification and admission recorded separately.
     const logEntry = JSON.stringify({
