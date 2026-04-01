@@ -452,10 +452,17 @@ JSON schema (all fields required):
   "confidence":              <number 0.0–1.0, confidence the interaction is benign>
 }`;
 
+/**
+ * Detect-mode Arbiter prompt — receives only structured Hunter/Explainer findings,
+ * NOT the original payload. Matches the isolation constraint from hazmat mode
+ * (pre-condition 2) to prevent second-order prompt injection via the raw text.
+ * The Hunter and Explainer summaries carry sufficient signal for a verdict.
+ */
 const ARBITER_PROMPT = `You are a security adjudicator weighing two expert analyses of a flagged AI interaction.
 Make the operationally correct decision. Focus on the consequence of compliance, not just surface wording.
 
-You will receive the original interaction text, then Threat Hunter findings (JSON), then Benign Explainer findings (JSON).
+You will receive Threat Hunter findings (JSON) and Benign Explainer findings (JSON).
+Do NOT request or reference the original interaction text — the structured findings are sufficient.
 
 Return ONLY a JSON object — no markdown, no explanation.
 
@@ -594,11 +601,10 @@ export class TribunalSurgeon implements ISurgeon {
       callGeminiRaw(this.apiKey, this.model, EXPLAINER_PROMPT, input),
     ]);
 
-    // Step 2: Arbiter receives original text + both structured findings
+    // Step 2: Arbiter receives ONLY structured findings — raw payload intentionally excluded.
+    // Prevents second-order prompt injection: a crafted payload could embed fake
+    // Hunter/Explainer JSON inside the raw text and manipulate the Arbiter verdict.
     const arbiterUserText = [
-      'ORIGINAL INTERACTION:',
-      input,
-      '',
       'THREAT HUNTER FINDINGS:',
       JSON.stringify(hunterRaw, null, 2),
       '',
@@ -772,13 +778,20 @@ export class StubSurgeon implements ISurgeon {
 
     const checksApplied: HazmatCheckKey[] = [
       HAZMAT_CHECKS.INPUT_CAPPED,
-      HAZMAT_CHECKS.PROVENANCE_FRAMED,
+      // PROVENANCE_FRAMED intentionally omitted — heuristic path sends no LLM prompt,
+      // so interception context cannot be framed. Recorded in checksFailed below.
       // ARBITER_ISOLATED intentionally omitted — heuristic path has no Arbiter.
       HAZMAT_CHECKS.ALLOWLIST_VALIDATED,
       HAZMAT_CHECKS.BENIGN_GATED,
     ];
     const { type: attackType, passed: allowlistPassed } = validateAttackType(stub.attackType);
-    const checksFailed: HazmatCheckKey[] = allowlistPassed ? [] : [HAZMAT_CHECKS.ALLOWLIST_VALIDATED];
+    // PROVENANCE_FRAMED always fails for StubSurgeon — heuristics cannot frame context.
+    // This causes applyAdmissionPolicy() to return category:'drop' + requireHumanReview:true,
+    // which is the correct safe posture when the LLM fallback is unavailable.
+    const checksFailed: HazmatCheckKey[] = [
+      HAZMAT_CHECKS.PROVENANCE_FRAMED,
+      ...(allowlistPassed ? [] : [HAZMAT_CHECKS.ALLOWLIST_VALIDATED]),
+    ];
 
     return {
       artifactId:              context.artifactId,

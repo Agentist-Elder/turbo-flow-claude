@@ -771,7 +771,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
       ingressPath:     '/api/v1/telemetry/hazmat',
       corpusVersion:   POLICY_VERSION,
       policy:          STUB_POLICY,
-      classifier:      async () => classification,   // already computed above — no second Surgeon call
+      classifier:      async (_content, artifactId) => {
+        // Bind the pipeline's RawArtifact.artifact_id onto the pre-computed classification.
+        // Without this, classificationRecord.artifact_id (safeNodeId+':'+created_at) diverges
+        // from rawArtifact.artifact_id (SHA-256 of content+timestamp+salt), silently breaking
+        // the foreign-key link in the WitnessRecord audit chain for every hazmat record.
+        classification.artifactId = artifactId;
+        return classification;
+      },   // already computed above — no second Surgeon call
       admissionPolicy: ()      => admission,         // already computed above
     });
 

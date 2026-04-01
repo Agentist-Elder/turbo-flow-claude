@@ -285,15 +285,19 @@ describe('StubSurgeon.analyzeHazmat — output contract', () => {
     expect(r.rawSeenBy).not.toContain('arbiter');
   });
 
-  it('checksApplied contains the 4 checks applicable to the heuristic path', async () => {
-    // ARBITER_ISOLATED is intentionally omitted from StubSurgeon — there is no Arbiter
-    // to isolate on a heuristic path. Only TribunalSurgeon can honestly attest this check.
+  it('checksApplied contains the 3 checks applicable to the heuristic path; PROVENANCE_FRAMED is in checksFailed', async () => {
+    // StubSurgeon sends no LLM prompt — it cannot honestly attest PROVENANCE_FRAMED
+    // (no interception context was framed). Moving it to checksFailed causes
+    // applyAdmissionPolicy() to return category:'drop' + requireHumanReview:true,
+    // which is the correct safe posture when LLM fallback is unavailable.
+    // ARBITER_ISOLATED is also omitted — there is no Arbiter on a heuristic path.
     const r = await stub.analyzeHazmat(makeContext());
     expect(r.checksApplied).toContain(HAZMAT_CHECKS.INPUT_CAPPED);
-    expect(r.checksApplied).toContain(HAZMAT_CHECKS.PROVENANCE_FRAMED);
     expect(r.checksApplied).toContain(HAZMAT_CHECKS.ALLOWLIST_VALIDATED);
     expect(r.checksApplied).toContain(HAZMAT_CHECKS.BENIGN_GATED);
+    expect(r.checksApplied).not.toContain(HAZMAT_CHECKS.PROVENANCE_FRAMED);
     expect(r.checksApplied).not.toContain(HAZMAT_CHECKS.ARBITER_ISOLATED);
+    expect(r.checksFailed).toContain(HAZMAT_CHECKS.PROVENANCE_FRAMED);
   });
 
   it('rawSeenBy is empty for heuristic path — no named sub-agents', async () => {
