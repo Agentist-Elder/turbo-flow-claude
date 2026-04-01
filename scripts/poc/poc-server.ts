@@ -375,13 +375,37 @@ async function preloadCorpus(
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
+/** Maximum request body: 1 MiB. Prevents memory-exhaustion DoS on all endpoints. */
+const MAX_BODY_BYTES = 1_048_576;
+
 function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data',  (c: Buffer) => chunks.push(c));
+    let totalSize = 0;
+    req.on('data', (c: Buffer) => {
+      totalSize += c.byteLength;
+      if (totalSize > MAX_BODY_BYTES) {
+        req.destroy();
+        const err = Object.assign(new Error('Request body exceeds 1 MiB limit'), { code: 'BODY_TOO_LARGE' });
+        reject(err);
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end',   ()          => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+/**
+ * Strip ANSI escape sequences and ASCII control characters from a string
+ * before use in log lines or key concatenation. Prevents log injection and
+ * terminal hijacking via attacker-controlled fields (e.g. source_node_id).
+ */
+function sanitizeForLog(s: string): string {
+  return s
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')   // ANSI CSI sequences
+    .replace(/[\x00-\x1f\x7f]/g, '_');         // remaining control characters
 }
 
 function jsonResponse(res: ServerResponse, status: number, data: unknown): void {
@@ -485,7 +509,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     // Only store when confidence >= 0.70 — borderline results would corrupt KNN model.
     if (shouldLearnFromSurgeon(surgeonResult)) {
       const learnedEntry: ReflexionMemoryEntry = {
-        trajectory: text.slice(0, 200),
+        // Strip control chars from trajectory — the KNN embedding is what matters;
+        // the raw text is for human review only and must not carry prompt injection.
+        trajectory: text.slice(0, 200).replace(/[\x00-\x1f\x7f]/g, ' '),
         verdict:    'failure',
         feedback:   `${surgeonResult.attackType}: ${surgeonResult.coreIntent}`,
         embedding:  l1Embedding,
@@ -712,15 +738,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
 
     // Decode raw content from base64 payload for classification.
     const rawContent = Buffer.from(envelope.payload, 'base64').toString('utf-8');
-    const artifactId = envelope.metadata.source_node_id + ':' + envelope.metadata.created_at;
+    // Sanitize source_node_id before embedding in keys or log lines — prevents
+    // JSONL log injection (newlines) and ANSI terminal spoofing.
+    const safeNodeId = sanitizeForLog(envelope.metadata.source_node_id);
+    const artifactId = safeNodeId + ':' + envelope.metadata.created_at;
 
     // Step 1 — Classification (analyzeHazmat)
     const hazmatContext: HazmatContext = {
       content:         rawContent,
-      // participant_type is not yet in HazmatEnvelopeSchema — read if present (future senders),
-      // fall back to 'unknown' rather than hardcoding 'ruvbot' (which corrupts audit logs
-      // for cognitum_device / mcp_agent / become_proxy callers).
-      participantType: String((envelope as Record<string, unknown>)['participant_type'] ?? 'unknown'),
+      // participant_type is now in HazmatEnvelopeSchema as a validated enum.
+      // Use the parsed value directly — no cast, no bypass of Zod schema.
+      participantType: envelope.participant_type ?? 'unknown',
       interceptedBy:   String((envelope as Record<string, unknown>)['intercepted_by'] ?? 'unknown'),
       artifactId,
       policyVersion:   POLICY_VERSION,
@@ -733,11 +761,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     // Step 3 — Pipeline: produce WitnessRecord chain + PropagationRecord.
     // Pass pre-computed classification and admission as closures to avoid a
     // second Surgeon call. runPipeline() is I/O-free — persistence is our job.
-    const participantType = (() => {
-      const raw = String((envelope as Record<string, unknown>)['participant_type'] ?? 'unknown');
-      const valid: RuClawRoleType[] = ['human','internal_agent','external_agent','privileged_process','quarantine_analyzer','observer','unknown'];
-      return valid.includes(raw as RuClawRoleType) ? raw as RuClawRoleType : 'unknown';
-    })();
+    // participant_type is validated by HazmatEnvelopeSchema — no secondary cast needed.
+    const participantType: RuClawRoleType = envelope.participant_type ?? 'unknown';
 
     const pipelineResult = await runPipeline({
       content:         rawContent,
@@ -776,13 +801,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
     await appendFile(HAZMAT_LOG_FILE, logEntry + '\n', 'utf-8');
 
     console.log(
-      `[HAZMAT   ]  ${admission.category.toUpperCase()} from ${envelope.metadata.source_node_id}` +
+      `[HAZMAT   ]  ${admission.category.toUpperCase()} from ${safeNodeId}` +
       ` attackType=${classification.attackType} conf=${classification.confidence.toFixed(2)}` +
       ` band=${classification.confidenceBand} source=${classification.source}`,
     );
     jsonResponse(res, 202, {
       accepted:          true,
-      source_node_id:    envelope.metadata.source_node_id,
+      source_node_id:    safeNodeId,
       received_at:       new Date().toISOString(),
       admission_category: admission.category,
       require_human_review: admission.requireHumanReview,
@@ -853,7 +878,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, surgeon: ISurge
 
 const args    = process.argv.slice(2);
 const portIdx = args.indexOf('--port');
-const PORT    = portIdx >= 0 ? parseInt(args[portIdx + 1]!, 10) : 3000;
+const rawPort = portIdx >= 0 ? parseInt(args[portIdx + 1] ?? '', 10) : 3000;
+if (portIdx >= 0 && (!Number.isFinite(rawPort) || rawPort < 1 || rawPort > 65535)) {
+  console.error('[FATAL] --port requires a valid port number (1–65535)');
+  process.exit(1);
+}
+const PORT = rawPort;
 
 const cache            = new EphemeralCache();
 const surgeon          = createSurgeon();
@@ -880,6 +910,10 @@ const l1BootStats = { corpusLoaded: 0, sessionLearnedLoaded: 0 };
 
 const server = createServer((req, res) => {
   handle(req, res, surgeon).catch(err => {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'BODY_TOO_LARGE') {
+      if (!res.headersSent) res.writeHead(413).end('Request body too large (limit: 1 MiB)');
+      return;
+    }
     console.error('[ERROR]', err instanceof Error ? err.message : String(err));
     if (!res.headersSent) res.writeHead(500).end('Internal Server Error');
   });

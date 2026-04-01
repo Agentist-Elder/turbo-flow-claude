@@ -188,7 +188,11 @@ function extractNamespace(record: WitnessRecord | PropagationRecord): string {
 // ---------------------------------------------------------------------------
 
 function edgeWeight(nodeCreatedAt: string, referenceFrequency: number): number {
-  const ageMs = Date.now() - new Date(nodeCreatedAt).getTime();
+  const parsed = new Date(nodeCreatedAt).getTime();
+  // Guard: malformed or non-finite timestamps (NaN, Infinity) produce zero-weight edges
+  // rather than propagating NaN into the WASM graph.
+  if (!Number.isFinite(parsed)) return 0;
+  const ageMs = Date.now() - parsed;
   const ageSeconds = Math.max(0, ageMs / 1000);
   const recencyFactor = 1 / (1 + ageSeconds / 3600);
   return recencyFactor * referenceFrequency;
@@ -459,9 +463,12 @@ export class RuPiCoherenceEngine {
     } = {},
   ) {
     const envThreshold = parseFloat(process.env['RUPI_ENERGY_THRESHOLD'] ?? '');
-    this.energyThreshold =
+    const raw =
       opts.energyThreshold ??
       (Number.isFinite(envThreshold) ? envThreshold : DEFAULT_ENERGY_THRESHOLD);
+    // Clamp to (0.01, 0.99): values ≤0 or ≥1 disable the threshold entirely,
+    // allowing env-var manipulation to bypass the Pi layer.
+    this.energyThreshold = Math.min(0.99, Math.max(0.01, raw));
   }
 
   /**
@@ -485,8 +492,13 @@ export class RuPiCoherenceEngine {
    * Inject a mock CohomologyEngine for testing without WASM.
    * Call this instead of initialize() in unit tests.
    * Marked with // WASM-STUB in test files.
+   *
+   * NOT available in production — throws if NODE_ENV === 'production'.
    */
   injectEngine(engine: CohomologyEngineInterface): void {
+    if (process.env['NODE_ENV'] === 'production') {
+      throw new Error('injectEngine() is not available in production builds');
+    }
     this.cohomologyEngine = engine;
     this.initialized = true;
   }
@@ -518,10 +530,12 @@ export class RuPiCoherenceEngine {
     let energyScore: number;
     try {
       energyScore = this.cohomologyEngine.consistencyEnergy(graph);
-      // Guard against NaN/Infinity from WASM
-      if (!Number.isFinite(energyScore)) energyScore = 0.5;
+      // Guard against NaN/Infinity from WASM — fail to maximum risk (suspended/deny),
+      // not to the midpoint. A 0.5 fallback would give 'restricted' access under
+      // induced WASM panics; 1.0 forces 'suspended' → 'deny'.
+      if (!Number.isFinite(energyScore)) energyScore = 1.0;
     } catch {
-      energyScore = 0.5; // Safe fallback on WASM error
+      energyScore = 1.0; // Fail-secure: WASM error → maximum risk → deny
     }
 
     // Step 4: Detect obstructions

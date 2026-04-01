@@ -100,6 +100,24 @@ export const HazmatEnvelopeSchema = z.object({
     ),
 
   /**
+   * Fleet-level role of the originating participant.
+   * Optional for backwards compatibility with existing senders; defaults to 'unknown'
+   * at the server when absent. Constrained to the RuClawRoleType governance taxonomy
+   * so arbitrary strings cannot be injected into the LLM Surgeon system prompt.
+   *
+   * Must stay in sync with RuClawRoleType in ruclawfleet-types.ts.
+   */
+  participant_type: z.enum([
+    'human',
+    'internal_agent',
+    'external_agent',
+    'privileged_process',
+    'quarantine_analyzer',
+    'observer',
+    'unknown',
+  ]).optional(),
+
+  /**
    * Provenance metadata for audit trail (PRD §8) and trusted-node verification
    * (PRD §4 Step 4: "known and trusted RuvBots").
    */
