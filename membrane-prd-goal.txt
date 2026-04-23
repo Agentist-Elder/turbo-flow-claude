@@ -1,0 +1,63 @@
+Task: Produce a SPARC-structured PRD skeleton for an adversarial robustness evaluation of an edge-first agent protection architecture. This is a documentation drafting task. Expand the supplied constraints into a structured PRD. Do NOT redecide architectural questions — they are locked below.
+
+# LOCKED DECISIONS (treat as given — do not modify, re-derive, or second-guess)
+
+## Unit under test
+A two-part deterministic host-level membrane running inside a browser-contained agent shell:
+- Ingress path: host fetches raw content → MiniLM-L6-v2 embedding → HNSW lookup against a locally persisted signature store seeded with 809 attack vectors → returns either sanitized content or a synthetic error to the agent. The LLM never sees raw chaotic input.
+- Egress path: intercepts agent-issued consequential actions (tool calls, memory writes, outgoing messages, structured submissions). Runs a per-tool argument contract check plus an HNSW anomaly score against the same signature store. Decides allow / block / quarantine.
+- Explicitly excluded: no LLM in the decision loop. No Surgeon call. No Gemini or Claude API call inside the membrane itself.
+
+## Evaluation modes (fixed)
+- Mode 1: no membrane, baseline LLM agent
+- Mode 2: ingress host-memory lookup + egress consequence gate (the thesis)
+- Mode 3: Mode 2 plus plain-text output gating on all assistant utterances (the control)
+
+## Task corpus shape (fixed)
+Four buckets, approximately 80 tasks each, about 320 total:
+- Benign workflows (ordinary user prompts)
+- Direct adversarial prompts (known prompt-manipulation attack families, sourced from public corpora)
+- Indirect adversarial content (manipulation payloads embedded in quoted documents, webpages, emails)
+- Borderline items (creative, speculative, weakly grounded but harmless)
+Each task carries a pre-assigned gold label from the set {safe_allow, unsafe_block, quarantine_ok, allow_ok}.
+
+## Primary metrics (fixed)
+Attack Success Rate, False Positive Rate, Containment Rate, Latency (p50 and p95), Review Burden, Explanation Quality.
+
+## Decisions the swarm must NOT make
+- Do not propose new unit-under-test definitions
+- Do not pick numeric success thresholds (author will commit those separately before the run)
+- Do not generate adversarial task content
+- Do not introduce an LLM into the membrane decision path
+- Do not recommend replacing HNSW with an LLM judge
+
+# WHAT I WANT YOU TO PRODUCE
+
+A SPARC-structured PRD skeleton at docs/research/membrane-evaluation-sparc.md with:
+
+1. S (Specification) — formal restatement of the locked decisions, the evaluation question, and the falsifiability conditions. No new decisions; cleaner expression of what is given.
+
+2. P (Pseudocode) — intercept-point pseudocode for the ingress and egress host layers. Reference existing components only: @ruvector/mincut-wasm, MiniLM-L6-v2 ONNX embedding, hnswlib-wasm, the 809 seed corpus, the existing PropagationRecord and WitnessChain record types. Do not invent new components.
+
+3. A (Architecture) — component diagram and data flow for the three evaluation modes. Identify each intercept point and what the host does there. Identify what must run in-browser vs what may run in a Node harness as a first stand-in.
+
+4. R (Refinement) — open questions register. This is the critical section. For each unlocked decision the author still has to make, produce a question, a constraint set, and a recommended default the author can accept or override. Examples of what belongs here: embedding dimensionality, HNSW parameters, contract language for the egress schema check, explanation-quality rubric, review-burden definition, which public corpora to draw from.
+
+5. C (Completion) — go/no-go decision gate: what results would justify productization of the thesis, what would justify scope simplification, what would justify abandonment. Leave numeric thresholds as placeholders the author will bind.
+
+# CONSTRAINTS ON THE DRAFT
+
+- SPARC section headers exactly as above (S, P, A, R, C).
+- Flag any section where you are guessing with an explicit note: UNVERIFIED — author must confirm.
+- Cite file paths only where known to exist in the repo. Do not invent paths. Known paths include: packages/host-rpc-server/src/llm-surgeon.ts, scripts/poc/poc-server.ts, docs/ruclawfleet-arch-baseline.md, docs/research/craftsman-pivot-sparc.md.
+- Target roughly 800–1500 lines of markdown.
+- Do not generate example adversarial content. Refer to attack families by public name without reproducing payloads.
+- The output is a skeleton for human expansion, not a finished specification.
+
+# CONTEXT REFERENCES (read-only, do not modify)
+
+- CLAUDE.md — master swarm directive
+- docs/research/craftsman-pivot-sparc.md — predecessor SPARC doc, has 4 open P0 findings from AQE review
+- docs/ruclawfleet-arch-baseline.md — existing invariants and GOAP action vocabulary ground truth
+
+Write the PRD skeleton now.
